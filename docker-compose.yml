@@ -1,0 +1,51 @@
+# CalPolySOC Cloud Console — bare-metal deploy
+#
+# Designed to run on the internal `aws` VM (172.21.1.30) alongside Floci,
+# Nginx, and the EC2 API wrapper. The Nginx vhost for cloud.calpolysoc.org
+# should reverse-proxy to 127.0.0.1:3000.
+#
+# Usage:
+#   cp frontend/.env.example frontend/.env
+#   docker compose up -d --build
+#
+# To deploy with a different upstream API, edit CLOUD_API_BASE_URL in
+# frontend/.env (or override here).
+
+services:
+  console:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: calpolysoc/cloud-console:latest
+    container_name: cloud-console
+    restart: unless-stopped
+    env_file:
+      - ./frontend/.env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    ports:
+      # Bind to loopback only — Nginx on the host fronts this on port 80/443.
+      - "127.0.0.1:3000:3000"
+    # The internal API hostname must resolve from inside the container.
+    # If AD DNS isn't available to Docker, pin it to the API VM.
+    extra_hosts:
+      - "api.cloud.calpolysoc.org:172.21.1.30"
+    # AD DNS doesn't know about auth.calpolysoc.org (Cloudflare-managed).
+    # Use public resolvers so the container can reach Keycloak via the CF tunnel.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - cloud
+
+networks:
+  cloud:
+    driver: bridge
