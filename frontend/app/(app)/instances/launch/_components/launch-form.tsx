@@ -1,6 +1,6 @@
 "use client";
 
-import { type ChangeEvent, type FormEvent, useState } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,7 @@ export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) 
   const [imageId, setImageId] = useState(capabilities.serverProfile.imageId);
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
   const selectedType =
@@ -31,8 +32,53 @@ export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) 
     getImageCatalog(capabilities.images, imageId) ??
     capabilities.images[0];
 
+  useEffect(() => {
+    if (!jobId) return;
+
+    let active = true;
+
+    async function pollJob() {
+      try {
+        const res = await fetch(`/api/ec2/jobs/${jobId}`, { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error ?? `launch status failed (${res.status})`);
+        }
+        if (!active) return;
+
+        setResult(data);
+        const state = String(data?.state ?? "").toLowerCase();
+        if (["succeeded", "warning", "failed"].includes(state)) {
+          setSubmitting(false);
+          setJobId(null);
+          if (state === "failed") {
+            setError(data?.error ?? data?.message ?? "launch failed");
+            return;
+          }
+          setTimeout(() => router.push("/instances"), 1200);
+        }
+      } catch (e: any) {
+        if (!active) return;
+        setJobId(null);
+        setSubmitting(false);
+        setError(e?.message ?? "launch status failed");
+      }
+    }
+
+    void pollJob();
+    const timer = window.setInterval(() => {
+      void pollJob();
+    }, 2000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [jobId, router]);
+
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    setJobId(null);
     setError(null);
     setResult(null);
     setSubmitting(true);
@@ -55,13 +101,36 @@ export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error ?? `launch failed (${res.status})`);
       setResult(data);
+      const state = String(data?.state ?? "").toLowerCase();
+      if (data?.job_id && ["pending", "running"].includes(state)) {
+        setJobId(data.job_id);
+        return;
+      }
+      setSubmitting(false);
       setTimeout(() => router.push("/instances"), 1200);
     } catch (e: any) {
       setError(e?.message ?? "launch failed");
-    } finally {
       setSubmitting(false);
     }
   }
+
+  const resultState = String(result?.state ?? "").toLowerCase();
+  const resultTitle =
+    resultState === "succeeded"
+      ? "Launch complete"
+      : resultState === "warning"
+        ? "Launch complete with warning"
+        : resultState === "failed"
+          ? "Launch failed"
+          : jobId || resultState === "pending" || resultState === "running"
+            ? "Launch in progress"
+            : "Launch accepted";
+  const resultClassName =
+    resultState === "warning"
+      ? "rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm"
+      : resultState === "failed"
+        ? "rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
+        : "rounded-md border border-emerald-500/50 bg-emerald-500/10 p-3 text-sm";
 
   return (
     <form onSubmit={onSubmit} className="space-y-5">
@@ -184,10 +253,16 @@ export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) 
       ) : null}
 
       {result ? (
-        <div className="rounded-md border border-emerald-500/50 bg-emerald-500/10 p-3 text-sm">
+        <div className={resultClassName}>
           <div className="font-medium text-emerald-700 dark:text-emerald-400">
-            Launch accepted
+            {resultTitle}
           </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {result?.message ??
+              (jobId
+                ? "Provisioning is running in the background. This page will redirect when the job reaches a terminal state."
+                : "The launch request was accepted.")}
+          </p>
           <pre className="mt-2 overflow-x-auto text-xs">
             {JSON.stringify(result, null, 2)}
           </pre>

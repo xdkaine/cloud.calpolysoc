@@ -334,10 +334,154 @@ Current EC2 API endpoints:
 | `GET` | `/ec2/health` | Health check |
 | `GET` | `/ec2/instances` | List Proxmox-backed instances |
 | `GET` | `/ec2/instances?vmid=<VMID>` | Show one instance |
-| `POST` | `/ec2/instances` | Launch a new VM |
+| `GET` | `/ec2/jobs/<JOB_ID>` | Show background launch job status |
+| `POST` | `/ec2/instances` | Queue a new VM launch and return a pending job |
 | `POST` | `/ec2/instances/<VMID>/start` | Start VM |
 | `POST` | `/ec2/instances/<VMID>/stop` | Stop VM |
 | `DELETE` | `/ec2/instances/<VMID>` | Stop and terminate VM |
+
+#### Required fix: assign Proxmox ACLs after launch
+
+Launches from the console were verified to create VMs successfully without
+automatically assigning per-user Proxmox ACLs. A manual call to
+`PUT /api2/json/access/acl` for `/vms/103` succeeded and the follow-up ACL read
+showed:
+
+```json
+[
+  {
+  "path": "/vms/103",
+  "type": "user",
+  "roleid": "PVEVMUser",
+  "propagate": 0,
+  "ugid": "tphao@calpolysoc"
+  }
+]
+```
+
+That means the missing behavior is in `/opt/calpoly-cloud/ec2-api.py` or
+`cloudctl`, not in the frontend proxy or in Proxmox ACL semantics.
+
+The console already forwards trusted identity headers on every authenticated
+`/api/ec2/*` request:
+
+- `X-Console-User-Id`
+- `X-Console-User-Email`
+- `X-Console-User-Name`
+- `X-Console-User-Roles`
+- `X-Console-Auth-Source`
+
+The wrapper should use `X-Console-User-Email` when the Proxmox user principal
+matches the site identity, or map that email onto the correct Proxmox user or
+group if a realm translation is required.
+
+Required launch flow in the wrapper:
+
+1. Read the trusted console identity headers from the incoming request.
+2. Return a `202 Accepted` launch job immediately so the browser does not wait
+  for clone/start completion inline.
+3. Create the VM in a background worker thread and capture the resulting `vmid`.
+4. Call Proxmox `PUT /api2/json/access/acl` for `path=/vms/<vmid>`.
+5. Assign `users=<principal>` and `roles=PVEVMUser` with `propagate=0`.
+6. If VM creation succeeds but the ACL write fails, keep the job successful
+  with a warning payload and log the failure to journald so the UI does not
+  report a false launch failure for a VM that now exists in Proxmox.
+
+The wrapper now logs launch stages with messages like:
+
+- `[launch] principal=<user> vmid=<vmid> instance_id=<instance_id> name=<name>`
+- `[launch-acl] principal=<user> vmid=<vmid> role=PVEVMUser`
+- `[launch-warning] principal=<user> vmid=<vmid> stage=assign_acl error=<error>`
+
+That makes `journalctl -u calpoly-ec2-api -f` the primary runtime signal for
+whether a launch failed before VM creation, failed while resolving the created
+VMID, or succeeded with an ACL warning.
+
+Minimal Python shape for the Flask wrapper:
+
+```python
+import os
+import requests
+
+
+def proxmox_base_url() -> str:
+  return os.getenv("PROXMOX_API_BASE_URL") or (
+    f"{os.getenv('PROXMOX_PROTOCOL', 'https')}://"
+    f"{os.environ['PROXMOX_HOST']}:{os.getenv('PROXMOX_PORT', '8006')}"
+  )
+
+
+def proxmox_verify_tls() -> bool:
+  return os.getenv("PROXMOX_ALLOW_INSECURE_TLS", "true").lower() not in {
+    "1",
+    "true",
+    "yes",
+    "on",
+  }
+
+
+def assign_vm_acl(vmid: int | str, principal: str, role: str = "PVEVMUser") -> None:
+  response = requests.put(
+    f"{proxmox_base_url()}/api2/json/access/acl",
+    headers={
+      "Authorization": (
+        "PVEAPIToken="
+        f"{os.environ['PROXMOX_TOKEN_ID']}={os.environ['PROXMOX_TOKEN_SECRET']}"
+      )
+    },
+    data={
+      "path": f"/vms/{vmid}",
+      "users": principal,
+      "roles": role,
+      "propagate": "0",
+    },
+    verify=proxmox_verify_tls(),
+    timeout=30,
+  )
+  response.raise_for_status()
+
+
+def resolve_console_principal(headers) -> str:
+  principal = headers.get("X-Console-User-Email", "").strip()
+  if not principal:
+    raise ValueError("missing X-Console-User-Email header")
+  return principal
+```
+
+In the background launch worker, call `assign_vm_acl(vmid, principal)` after
+`cloudctl run-instance` succeeds and expose the current job state through
+`GET /ec2/jobs/<job_id>`.
+
+The canonical deployable wrapper now lives at `deploy/ec2-api.py` in this
+repository.
+
+For Windows-based deployment, `deploy/apply-ec2-wrapper.ps1` backs up the
+current wrapper, copies the canonical wrapper to the aws VM, restarts
+`calpoly-ec2-api`, and verifies `http://127.0.0.1:8090/health`.
+
+For deployment directly on the aws VM, `deploy/apply-ec2-wrapper.sh`
+backs up the current wrapper, installs the canonical wrapper from the
+repo clone, restarts `calpoly-ec2-api`, and verifies the same local health
+endpoint.
+
+For slow clone/start operations, the console nginx vhost in
+`deploy/nginx/cloud.calpolysoc.org.conf` still uses a 600 second read/send
+timeout, but the wrapper should now return quickly with a pending job instead
+of relying on that long timeout budget.
+
+Equivalent raw API call for debugging:
+
+```bash
+curl -sk -X PUT \
+  -H "Authorization: PVEAPIToken=${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}" \
+  --data-urlencode "path=/vms/${VMID}" \
+  --data-urlencode "users=${CONSOLE_USER_EMAIL}" \
+  --data-urlencode "roles=PVEVMUser" \
+  --data-urlencode "propagate=0" \
+  "${PROXMOX_BASE}/api2/json/access/acl"
+```
+
+For this endpoint, a response body of `{"data":null}` indicates success.
 
 Example launch request:
 
@@ -478,33 +622,33 @@ DELETE /ec2/instances/<VMID>
 
 ### 2. Async EC2 Jobs
 
-Current `POST /ec2/instances` waits for Proxmox clone/start to finish. This can cause Nginx 504 timeouts.
+`POST /ec2/instances` now returns a background launch job immediately so the
+browser can poll instead of waiting for a full Proxmox clone/start cycle.
 
-Recommended next version:
+Current contract:
 
 ```text
 POST /ec2/instances
-  -> immediately returns:
+  -> immediately returns 202:
      {
-       "job_id": "job-...",
-       "instance_id": "i-...",
+       "job_id": "...",
        "state": "pending"
      }
 
 GET /ec2/jobs/<job_id>
-  -> returns job status
+  -> returns job status, instance_id, vmid, acl result, and warning/error details
 
 GET /ec2/instances
   -> returns current instance state
 ```
 
-This requires:
+Current implementation notes:
 
 ```text
-SQLite or Postgres state DB
-Background worker
-Job table
-Instance table
+In-memory Flask job store
+Background thread per launch
+Job states: pending, running, succeeded, warning, failed
+Frontend launch form polls until terminal state
 ```
 
 ---

@@ -13,6 +13,7 @@ async function forward(req: NextRequest, path: string[]) {
   const url = new URL(req.url);
   const upstream = `${API_BASE}/ec2/${path.join("/")}${url.search}`;
   const headers = filterHeaders(req.headers);
+  applySessionIdentityHeaders(headers, session.user);
   if (session.accessToken) {
     headers.set("Authorization", `Bearer ${session.accessToken}`);
   }
@@ -35,11 +36,51 @@ async function forward(req: NextRequest, path: string[]) {
 function filterHeaders(h: Headers) {
   const out = new Headers();
   h.forEach((v, k) => {
-    if (["host", "connection", "content-length"].includes(k.toLowerCase()))
+    if (
+      [
+        "host",
+        "connection",
+        "content-length",
+        "authorization",
+        "x-console-user-id",
+        "x-console-user-email",
+        "x-console-user-name",
+        "x-console-user-roles",
+        "x-console-auth-source",
+      ].includes(k.toLowerCase())
+    )
       return;
     out.set(k, v);
   });
   return out;
+}
+
+function applySessionIdentityHeaders(
+  headers: Headers,
+  user: {
+    id?: string;
+    email?: string | null;
+    name?: string | null;
+    roles?: string[];
+  },
+) {
+  if (user.id) {
+    headers.set("X-Console-User-Id", user.id);
+  }
+
+  if (user.email) {
+    headers.set("X-Console-User-Email", user.email);
+  }
+
+  if (user.name) {
+    headers.set("X-Console-User-Name", user.name);
+  }
+
+  if (user.roles?.length) {
+    headers.set("X-Console-User-Roles", user.roles.join(","));
+  }
+
+  headers.set("X-Console-Auth-Source", "nextauth-keycloak");
 }
 
 function passThroughHeaders(h: Headers) {

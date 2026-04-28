@@ -1,0 +1,268 @@
+root@aws:/opt/calpoly-cloud# cat cloudctl
+#!/usr/bin/env python3
+
+import argparse
+import os
+import sys
+import time
+import urllib.parse
+from pathlib import Path
+
+import requests
+
+requests.packages.urllib3.disable_warnings()
+
+ENV_FILE = "/etc/calpoly-cloud/proxmox.env"
+
+INSTANCE_TYPES = {
+    "t3.nano":   {"cores": 1, "memory": 512},
+    "t3.micro":  {"cores": 1, "memory": 1024},
+    "t3.small":  {"cores": 1, "memory": 2048},
+    "t3.medium": {"cores": 2, "memory": 4096},
+}
+
+
+def load_env():
+    if not Path(ENV_FILE).exists():
+        print(f"Missing config: {ENV_FILE}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(ENV_FILE) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ[k] = v
+
+
+class Proxmox:
+    def __init__(self):
+        self.host = os.environ["PROXMOX_HOST"]
+        self.node = os.environ["PROXMOX_NODE"]
+        self.token_id = os.environ["PROXMOX_TOKEN_ID"]
+        self.token_secret = os.environ["PROXMOX_TOKEN_SECRET"]
+        self.template_id = int(os.environ.get("PROXMOX_TEMPLATE_ID", "9001"))
+        self.storage = os.environ.get("PROXMOX_STORAGE", "local-lvm")
+        self.bridge = os.environ.get("PROXMOX_BRIDGE", "vmbr0")
+        self.base = f"https://{self.host}:8006/api2/json"
+        self.headers = {
+            "Authorization": f"PVEAPIToken={self.token_id}={self.token_secret}"
+        }
+
+    def get(self, path):
+        r = requests.get(
+            f"{self.base}{path}",
+            headers=self.headers,
+            verify=False,
+            timeout=30,
+        )
+        self.check(r)
+        return r.json()["data"]
+
+    def post(self, path, data=None):
+        r = requests.post(
+            f"{self.base}{path}",
+            headers=self.headers,
+            data=data or {},
+            verify=False,
+            timeout=60,
+        )
+        self.check(r)
+        return r.json().get("data")
+
+    def delete(self, path, data=None):
+        r = requests.delete(
+            f"{self.base}{path}",
+            headers=self.headers,
+            params=data or {},
+            verify=False,
+            timeout=60,
+        )
+        self.check(r)
+        return r.json().get("data")
+
+    def check(self, response):
+        if response.status_code >= 400:
+            print("Proxmox API error:", file=sys.stderr)
+            print(response.status_code, response.text, file=sys.stderr)
+            sys.exit(1)
+
+    def wait_task(self, upid, timeout=900):
+        encoded = urllib.parse.quote(upid, safe="")
+        start = time.time()
+
+        while time.time() - start < timeout:
+            status = self.get(f"/nodes/{self.node}/tasks/{encoded}/status")
+
+            if status.get("status") == "stopped":
+                exitstatus = status.get("exitstatus")
+                if exitstatus == "OK":
+                    return
+                print(f"Task failed: {exitstatus}", file=sys.stderr)
+                sys.exit(1)
+
+            time.sleep(2)
+
+        print(f"Timed out waiting for task: {upid}", file=sys.stderr)
+        sys.exit(1)
+
+    def next_vmid(self):
+        return int(self.get("/cluster/nextid"))
+
+    def clone_template(self, vmid, name):
+        upid = self.post(
+            f"/nodes/{self.node}/qemu/{self.template_id}/clone",
+            data={
+                "newid": vmid,
+                "name": name,
+                "full": 1,
+                "storage": self.storage,
+            },
+        )
+        self.wait_task(upid)
+
+    def configure_vm(self, vmid, name, instance_type, user, password):
+        spec = INSTANCE_TYPES[instance_type]
+
+        data = {
+            "name": name,
+            "cores": spec["cores"],
+            "memory": spec["memory"],
+            "net0": f"virtio,bridge={self.bridge}",
+            "ipconfig0": "ip=dhcp",
+            "ciuser": user,
+            "agent": "enabled=1",
+        }
+
+        if password:
+            data["cipassword"] = password
+
+        self.post(f"/nodes/{self.node}/qemu/{vmid}/config", data=data)
+
+    def start_vm(self, vmid):
+        upid = self.post(f"/nodes/{self.node}/qemu/{vmid}/status/start")
+        self.wait_task(upid)
+
+    def stop_vm(self, vmid):
+        upid = self.post(f"/nodes/{self.node}/qemu/{vmid}/status/stop")
+        self.wait_task(upid)
+
+    def delete_vm(self, vmid):
+        upid = self.delete(
+            f"/nodes/{self.node}/qemu/{vmid}",
+            data={
+                "purge": 1,
+                "destroy-unreferenced-disks": 1,
+            },
+        )
+        self.wait_task(upid)
+
+    def status_vm(self, vmid):
+        return self.get(f"/nodes/{self.node}/qemu/{vmid}/status/current")
+
+    def list_vms(self):
+        return self.get(f"/nodes/{self.node}/qemu")
+
+
+def run_instance(args):
+    pve = Proxmox()
+
+    if args.instance_type not in INSTANCE_TYPES:
+        print(f"Unsupported instance type: {args.instance_type}", file=sys.stderr)
+        sys.exit(1)
+
+    vmid = pve.next_vmid()
+    instance_id = f"i-{vmid:08d}"
+    name = args.name
+
+    print(f"Launching {instance_id}")
+    print(f"Node: {pve.node}")
+    print(f"Template: {pve.template_id}")
+    print(f"VMID: {vmid}")
+    print(f"Name: {name}")
+    print(f"Instance type: {args.instance_type}")
+
+    pve.clone_template(vmid, name)
+    pve.configure_vm(vmid, name, args.instance_type, args.user, args.password)
+    pve.start_vm(vmid)
+
+    status = pve.status_vm(vmid)
+
+    print("")
+    print("Instance launched:")
+    print(f"  InstanceId: {instance_id}")
+    print(f"  ProxmoxVMID: {vmid}")
+    print(f"  Name: {name}")
+    print(f"  State: {status.get('status')}")
+    print(f"  Node: {pve.node}")
+
+
+def describe_instances(args):
+    pve = Proxmox()
+    for vm in pve.list_vms():
+        vmid = int(vm.get("vmid"))
+        if args.vmid and vmid != int(args.vmid):
+            continue
+        print(
+            f"i-{vmid:08d}  "
+            f"vmid={vmid}  "
+            f"name={vm.get('name')}  "
+            f"state={vm.get('status')}"
+        )
+
+
+def start_instance(args):
+    pve = Proxmox()
+    pve.start_vm(int(args.vmid))
+    print(f"Started i-{int(args.vmid):08d}")
+
+
+def stop_instance(args):
+    pve = Proxmox()
+    pve.stop_vm(int(args.vmid))
+    print(f"Stopped i-{int(args.vmid):08d}")
+
+
+def terminate_instance(args):
+    pve = Proxmox()
+    pve.delete_vm(int(args.vmid))
+    print(f"Terminated i-{int(args.vmid):08d}")
+
+
+def main():
+    load_env()
+
+    parser = argparse.ArgumentParser(description="CalPolySOC private cloud MVP controller")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    run = sub.add_parser("run-instance")
+    run.add_argument("--name", required=True)
+    run.add_argument("--ami", default="ami-ubuntu-2404")
+    run.add_argument("--instance-type", default="t3.small")
+    run.add_argument("--user", default="ubuntu")
+    run.add_argument("--password", default="ChangeMe123!")
+    run.set_defaults(func=run_instance)
+
+    desc = sub.add_parser("describe-instances")
+    desc.add_argument("--vmid")
+    desc.set_defaults(func=describe_instances)
+
+    start = sub.add_parser("start-instance")
+    start.add_argument("--vmid", required=True)
+    start.set_defaults(func=start_instance)
+
+    stop = sub.add_parser("stop-instance")
+    stop.add_argument("--vmid", required=True)
+    stop.set_defaults(func=stop_instance)
+
+    term = sub.add_parser("terminate-instance")
+    term.add_argument("--vmid", required=True)
+    term.set_defaults(func=terminate_instance)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

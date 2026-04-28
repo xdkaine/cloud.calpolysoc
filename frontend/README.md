@@ -17,7 +17,7 @@ Browser (on VPN)
   -> server components -> Proxmox API   (live template discovery)
         -> /api/ec2/*    -> http://api.cloud.calpolysoc.org/ec2/*    (EC2 API wrapper)
         -> /api/aws/s3   -> Floci S3
-        -> /api/aws/ddb  -> Floci DynamoDB
+  -> /api/aws/dynamodb -> Floci DynamoDB
         -> /api/aws/sqs  -> Floci SQS
 ```
 
@@ -135,6 +135,28 @@ requests are redirected to `/auth/signin`. Server-side proxy routes
 Keycloak access token as `Authorization: Bearer <token>` to the upstream
 API, so per-user RBAC can be enforced inside the EC2 API wrapper / Floci.
 
+For EC2 requests, the console also injects trusted identity headers derived
+from the validated session:
+
+- `X-Console-User-Id` (Keycloak subject)
+- `X-Console-User-Email`
+- `X-Console-User-Name`
+- `X-Console-User-Roles`
+- `X-Console-Auth-Source: nextauth-keycloak`
+
+That gives the off-repo EC2 wrapper enough context to assign Proxmox ACLs or
+ownership metadata without relying on browser-submitted identity fields.
+
+No extra frontend environment variable is required for that identity
+forwarding. As long as the existing Auth.js / Keycloak settings are correct
+(`AUTH_URL`, `AUTH_KEYCLOAK_ID`, `AUTH_KEYCLOAK_SECRET`, and
+`AUTH_KEYCLOAK_ISSUER`), the console can derive the current user from the
+validated session.
+
+If the upstream Proxmox permission logic needs a human-friendly identifier like
+`tphao@calpolysoc`, it should read `X-Console-User-Email`. If it needs the
+stable canonical owner key, it should read `X-Console-User-Id`.
+
 ### Keycloak client setup
 
 In the `calpolysoc` realm, create a **Confidential client**:
@@ -169,11 +191,14 @@ on instances, storage, queues, and other day-to-day workload actions.
 - `/instances` EC2-style VM list with start / stop / terminate
 - `/instances/launch` Launch a new VM from the Proxmox cloud-init template
 - `/api/ec2/capabilities` Authenticated live view of the active Proxmox-backed EC2 catalog
-- `/s3` Bucket list (Floci S3)
-- `/dynamodb` Table list (Floci DynamoDB)
-- `/sqs` Queue list (Floci SQS)
-- `/vpcs`, `/security-groups`, `/access-keys`, `/audit`, `/settings`
-  Placeholders mapped to roadmap items in the repo README.
+- `/s3` Bucket workspace with bucket create/delete and object upload/delete flows
+- `/dynamodb` Table workspace with table create/delete and item write/delete flows
+- `/sqs` Queue workspace with queue create/delete, send, poll, acknowledge, and purge flows
+- `/vpcs` Live fabric view that maps the current shared network model to the active Proxmox bridge and instance attachments
+- `/security-groups` Current platform guardrail view for ingress, egress, and workload exposure posture
+- `/access-keys` API onboarding view with current credential model and AWS-compatible CLI bootstrap commands
+- `/audit` Staff-only operational audit readiness page covering actor context and live control-plane signals
+- `/settings` Staff/admin catalog, endpoint, and platform diagnostics surface
 
 ## Updating
 
@@ -182,5 +207,5 @@ git pull
 docker compose up -d --build
 ```
 
-The container is healthchecked on `GET /` and restarted automatically by
+The container is healthchecked on `GET /api/health` and restarted automatically by
 Docker if it stops responding.

@@ -9,7 +9,9 @@ export default auth((req) => {
     nextUrl.pathname.startsWith("/auth") ||
     nextUrl.pathname.startsWith("/api/auth");
 
-  if (isAuthRoute) return NextResponse.next();
+  const isPublicRoute = nextUrl.pathname === "/api/health";
+
+  if (isAuthRoute || isPublicRoute) return NextResponse.next();
 
   if (!isAuthed) {
     const signInUrl = new URL("/auth/signin", nextUrl);

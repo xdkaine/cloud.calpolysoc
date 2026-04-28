@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import AccessDenied from "@/components/access-denied";
 import { PageHeader } from "@/components/page-header";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getEc2Capabilities } from "@/lib/ec2-capabilities";
 import { getConsoleAccess } from "@/lib/console-access";
@@ -12,6 +13,7 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage() {
   const session = await auth();
   const access = getConsoleAccess(session?.user?.roles);
+  const roles = session?.user?.roles ?? [];
   if (!access.canAccessAdmin) {
     return (
       <AccessDenied
@@ -50,6 +52,39 @@ export default async function SettingsPage() {
                 <Row k="Region" v={capabilities.serverProfile.region} />
                 <Row k="Active image" v={capabilities.serverProfile.imageId} />
               </dl>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Access context</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <StatusRow label="Console audience" value={access.label} />
+              <StatusRow
+                label="Account"
+                value={session?.user?.email ?? session?.user?.name ?? "Unavailable"}
+              />
+              <StatusRow
+                label="Subject"
+                value={session?.user?.id ?? "Unavailable"}
+              />
+              <div className="rounded-md border p-3">
+                <div className="font-medium">Mapped roles</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {roles.length ? (
+                    roles.map((role) => (
+                      <Badge key={role} variant="outline" className="font-mono">
+                        {role}
+                      </Badge>
+                    ))
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      No roles were extracted from the current session.
+                    </span>
+                  )}
+                </div>
+              </div>
             </CardContent>
           </Card>
 
@@ -95,7 +130,9 @@ function StatusRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between rounded-md border p-3">
       <div className="font-medium">{label}</div>
-      <div className="text-xs text-muted-foreground">{value}</div>
+      <div className="max-w-[16rem] truncate text-right text-xs text-muted-foreground">
+        {value}
+      </div>
     </div>
   );
 }
