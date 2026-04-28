@@ -11,28 +11,13 @@ export type ConsoleAccess = {
 
 const EXPLICIT_ROLE_AUDIENCE: Record<string, ConsoleAudience> = {
   "cloud-admin": "admin",
+  "cloud-staff": "staff",
+  "cloud-operator": "staff",
+  "cloud-support": "staff",
   "cloud-user": "client",
+  admin: "admin",
+  staff: "staff",
 };
-
-const ADMIN_PATTERNS = [
-  /\badmin\b/i,
-  /administrator/i,
-  /superuser/i,
-  /\bowner\b/i,
-];
-
-const STAFF_PATTERNS = [
-  /\bstaff\b/i,
-  /support/i,
-  /\bops\b/i,
-  /operator/i,
-  /\bsre\b/i,
-  /helpdesk/i,
-];
-
-function matchesRole(role: string, patterns: RegExp[]) {
-  return patterns.some((pattern) => pattern.test(role));
-}
 
 export function getConsoleAudience(roles?: string[]): ConsoleAudience {
   const normalizedRoles = roles
@@ -44,14 +29,6 @@ export function getConsoleAudience(roles?: string[]): ConsoleAudience {
     .find(Boolean);
   if (explicitAudience) {
     return explicitAudience;
-  }
-
-  if (normalizedRoles.some((role) => matchesRole(role, ADMIN_PATTERNS))) {
-    return "admin";
-  }
-
-  if (normalizedRoles.some((role) => matchesRole(role, STAFF_PATTERNS))) {
-    return "staff";
   }
 
   return "client";

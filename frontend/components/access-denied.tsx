@@ -15,7 +15,7 @@ export default function AccessDenied({
       <PageHeader title={title} description={description} />
       <Card className="max-w-2xl">
         <CardHeader>
-          <CardTitle>Privileged access required</CardTitle>
+          <CardTitle className="text-primary">Privileged access required</CardTitle>
           <CardDescription>
             This module is reserved for CalPolySOC staff and administrators.
           </CardDescription>

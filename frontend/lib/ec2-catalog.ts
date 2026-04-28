@@ -63,6 +63,62 @@ export const DEFAULT_INSTANCE_CATALOG: InstanceCatalogItem[] = [
     memoryMiB: 4096,
     description: "Heavier services that need more headroom for RAM and CPU.",
   },
+  {
+    value: "t3.large",
+    family: "Burstable",
+    vcpus: 2,
+    memoryMiB: 8192,
+    description: "Application nodes with more working memory.",
+  },
+  {
+    value: "t3.xlarge",
+    family: "Burstable",
+    vcpus: 4,
+    memoryMiB: 16384,
+    description: "Larger development and integration workloads.",
+  },
+  {
+    value: "c6i.large",
+    family: "Compute",
+    vcpus: 2,
+    memoryMiB: 4096,
+    description: "CPU-lean services and build agents.",
+  },
+  {
+    value: "c6i.xlarge",
+    family: "Compute",
+    vcpus: 4,
+    memoryMiB: 8192,
+    description: "Parallel jobs, CI runners, and CPU-heavy services.",
+  },
+  {
+    value: "m6i.large",
+    family: "General purpose",
+    vcpus: 2,
+    memoryMiB: 8192,
+    description: "Balanced app servers and service nodes.",
+  },
+  {
+    value: "m6i.xlarge",
+    family: "General purpose",
+    vcpus: 4,
+    memoryMiB: 16384,
+    description: "Larger balanced workloads.",
+  },
+  {
+    value: "r6i.large",
+    family: "Memory",
+    vcpus: 2,
+    memoryMiB: 16384,
+    description: "Memory-heavy services, caches, and databases.",
+  },
+  {
+    value: "r6i.xlarge",
+    family: "Memory",
+    vcpus: 4,
+    memoryMiB: 32768,
+    description: "Larger in-memory and data-heavy workloads.",
+  },
 ];
 
 export const DEFAULT_IMAGE_CATALOG: ImageCatalogItem[] = [
@@ -100,6 +156,28 @@ export const DEFAULT_IMAGE_CATALOG: ImageCatalogItem[] = [
       "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2",
   },
   {
+    id: "ami-debian-13",
+    displayName: "Debian 13 Trixie",
+    templateName: "tmpl-debian-13",
+    templateVmid: 9011,
+    username: "debian",
+    cloudInit: true,
+    minimumDiskGiB: 16,
+    downloadUrl:
+      "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2",
+  },
+  {
+    id: "ami-ubuntu-2004",
+    displayName: "Ubuntu 20.04 LTS",
+    templateName: "tmpl-ubuntu-2004",
+    templateVmid: 9003,
+    username: "ubuntu",
+    cloudInit: true,
+    minimumDiskGiB: 20,
+    downloadUrl:
+      "https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img",
+  },
+  {
     id: "ami-rocky-9",
     displayName: "Rocky Linux 9",
     templateName: "tmpl-rocky-9",
@@ -120,6 +198,39 @@ export const DEFAULT_IMAGE_CATALOG: ImageCatalogItem[] = [
     minimumDiskGiB: 16,
     downloadUrl:
       "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2",
+  },
+  {
+    id: "ami-centos-stream-9",
+    displayName: "CentOS Stream 9",
+    templateName: "tmpl-centos-stream-9",
+    templateVmid: 9040,
+    username: "cloud-user",
+    cloudInit: true,
+    minimumDiskGiB: 20,
+    downloadUrl:
+      "https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-x86_64-9-latest.x86_64.qcow2",
+  },
+  {
+    id: "ami-fedora-43",
+    displayName: "Fedora Cloud 43",
+    templateName: "tmpl-fedora-43",
+    templateVmid: 9050,
+    username: "fedora",
+    cloudInit: true,
+    minimumDiskGiB: 20,
+    downloadUrl:
+      "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2",
+  },
+  {
+    id: "ami-arch-linux",
+    displayName: "Arch Linux",
+    templateName: "tmpl-arch-linux",
+    templateVmid: 9060,
+    username: "arch",
+    cloudInit: true,
+    minimumDiskGiB: 16,
+    downloadUrl:
+      "https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2",
   },
 ];
 

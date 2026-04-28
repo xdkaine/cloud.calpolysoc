@@ -195,11 +195,26 @@ function inferDownloadUrl(slug: string) {
   if (slug.includes("debian-12")) {
     return "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2";
   }
+  if (slug.includes("debian-13") || slug.includes("trixie")) {
+    return "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2";
+  }
+  if (slug.includes("ubuntu-2004") || slug.includes("ubuntu-20-04")) {
+    return "https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img";
+  }
   if (slug.includes("rocky-9")) {
     return "https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2";
   }
   if (slug.includes("almalinux-9")) {
     return "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2";
+  }
+  if (slug.includes("centos-stream-9") || slug.includes("centos-9")) {
+    return "https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-x86_64-9-latest.x86_64.qcow2";
+  }
+  if (slug.includes("fedora-43")) {
+    return "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2";
+  }
+  if (slug.includes("arch")) {
+    return "https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2";
   }
   return "";
 }

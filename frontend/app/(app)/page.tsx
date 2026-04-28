@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { auth } from "@/auth";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/page-header";
 import { ec2 } from "@/lib/api";
 import { listBuckets, listQueues, listTables } from "@/lib/aws";
 import { getConsoleAccess } from "@/lib/console-access";
+import { visibleInstancesForUser } from "@/lib/instance-access";
+import { getTenantIdentity, isTenantResourceName } from "@/lib/tenant";
 import { Server, HardDrive, Database, Inbox, ArrowRight, AlertTriangle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -21,30 +23,51 @@ async function safe<T>(fn: () => Promise<T>, fallback: T): Promise<{ data: T; er
 export default async function DashboardPage() {
   const session = await auth();
   const access = getConsoleAccess(session?.user?.roles);
+  const identity = session?.user ? getTenantIdentity(session.user) : null;
   const [instances, buckets, tables, queues, health] = await Promise.all([
     safe(async () => {
-      const r = await ec2.list();
-      return Array.isArray(r) ? r : (r as any).instances ?? [];
+      const r = await ec2.list(session?.user);
+      const upstreamInstances = Array.isArray(r) ? r : (r as any).instances ?? [];
+      return visibleInstancesForUser(
+        upstreamInstances,
+        session?.user,
+        false,
+      );
     }, [] as any[]),
-    safe(listBuckets, [] as Array<{ name: string }>),
-    safe(listTables, [] as Array<{ name: string }>),
-    safe(listQueues, [] as Array<{ name: string }>),
+    safe(async () => {
+      const data = await listBuckets();
+      return identity
+        ? data.filter((item) => isTenantResourceName(item.name, identity))
+        : [];
+    }, [] as Array<{ name: string }>),
+    safe(async () => {
+      const data = await listTables();
+      return identity
+        ? data.filter((item) => isTenantResourceName(item.name, identity))
+        : [];
+    }, [] as Array<{ name: string }>),
+    safe(async () => {
+      const data = await listQueues();
+      return identity
+        ? data.filter((item) => isTenantResourceName(item.name, identity))
+        : [];
+    }, [] as Array<{ name: string }>),
     safe(ec2.health, { status: "unknown" } as { status: string }),
   ]);
 
   const tiles = [
-    { label: access.canAccessAdmin ? "Fleet instances" : "Your instances", count: instances.data.length, icon: Server, href: "/instances", err: instances.error },
-    { label: access.canAccessAdmin ? "S3 buckets" : "Your buckets", count: buckets.data.length, icon: HardDrive, href: "/s3", err: buckets.error },
-    { label: access.canAccessAdmin ? "DynamoDB tables" : "Your tables", count: tables.data.length, icon: Database, href: "/dynamodb", err: tables.error },
-    { label: access.canAccessAdmin ? "SQS queues" : "Your queues", count: queues.data.length, icon: Inbox, href: "/sqs", err: queues.error },
+    { label: "Your instances", count: instances.data.length, icon: Server, href: "/instances", err: instances.error },
+    { label: "Your S3 buckets", count: buckets.data.length, icon: HardDrive, href: "/s3", err: buckets.error },
+    { label: "Your DynamoDB tables", count: tables.data.length, icon: Database, href: "/dynamodb", err: tables.error },
+    { label: "Your SQS queues", count: queues.data.length, icon: Inbox, href: "/sqs", err: queues.error },
   ];
 
   const quickLinks = access.canAccessAdmin
     ? [
         { href: "/instances/launch", label: "Provision a new instance" },
-        { href: "/instances", label: "Review customer workloads" },
-        { href: "/settings", label: "Manage images and templates" },
-        { href: "/audit", label: "Inspect platform activity" },
+        { href: "/instances?scope=fleet", label: "Open fleet instance view" },
+        { href: "/settings", label: "Review platform configuration" },
+        { href: "/audit", label: "Review audit events" },
       ]
     : [
         { href: "/instances/launch", label: "Launch a new instance" },
@@ -55,8 +78,8 @@ export default async function DashboardPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title={access.canAccessAdmin ? "Operations dashboard" : "Your cloud workspace"}
-        description={access.description}
+        title="Dashboard"
+        description="A scoped view of your CalPolySOC compute and cloud resources."
         actions={<Badge variant={access.canAccessAdmin ? "secondary" : "outline"}>{access.label}</Badge>}
       />
 
@@ -64,13 +87,15 @@ export default async function DashboardPage() {
         {tiles.map((t) => {
           const Icon = t.icon;
           return (
-            <Link key={t.label} href={t.href}>
-              <Card className="transition-colors hover:border-primary/50">
+            <Link key={t.label} href={t.href} className="group">
+              <Card className="h-full transition-colors hover:border-primary/50 hover:bg-muted/35">
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground">
                     {t.label}
                   </CardTitle>
-                  <Icon className="h-4 w-4 text-muted-foreground" />
+                  <span className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
+                    <Icon className="h-4 w-4" />
+                  </span>
                 </CardHeader>
                 <CardContent>
                   {t.err ? (
@@ -81,8 +106,8 @@ export default async function DashboardPage() {
                   ) : (
                     <div className="text-3xl font-bold">{t.count}</div>
                   )}
-                  <div className="mt-2 flex items-center text-xs text-muted-foreground">
-                    view <ArrowRight className="ml-1 h-3 w-3" />
+                  <div className="mt-3 flex items-center text-xs font-medium text-primary">
+                    Open workspace <ArrowRight className="ml-1 h-3 w-3" />
                   </div>
                 </CardContent>
               </Card>
@@ -94,36 +119,28 @@ export default async function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>{access.canAccessAdmin ? "Platform status" : "Workspace status"}</CardTitle>
-            <CardDescription>
-              {access.canAccessAdmin
-                ? "Live health of internal cloud endpoints and supporting services"
-                : "Live service health for the cloud APIs your workspace depends on"}
-            </CardDescription>
+            <CardTitle className="text-primary">Service status</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <Row label="EC2 API" status={health.error ? "down" : "ok"} note="api.cloud.calpolysoc.org/ec2" />
             <Row label="Floci (S3 / DDB / SQS)" status={buckets.error && tables.error && queues.error ? "down" : "ok"} note="api.cloud.calpolysoc.org" />
             <Row label="Console" status="ok" note="cloud.calpolysoc.org" />
-            {!access.canAccessAdmin ? (
-              <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-                Resource lists are intended to be scoped by the Keycloak bearer token forwarded to the upstream APIs.
-              </div>
-            ) : null}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>{access.canAccessAdmin ? "Control plane" : "Quick links"}</CardTitle>
-            <CardDescription>
-              {access.canAccessAdmin ? "High-value operational actions" : "Common self-service actions"}
-            </CardDescription>
+            <CardTitle className="text-primary">{access.canAccessAdmin ? "Control plane" : "Quick links"}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             {quickLinks.map((item) => (
-              <Link key={item.href} className="block rounded-md border p-3 hover:border-primary/50" href={item.href}>
-                {item.label}
+              <Link
+                key={item.href}
+                className="flex min-h-11 items-center justify-between rounded-md border border-border/80 px-3 py-2 font-medium hover:border-primary/50 hover:bg-muted/35"
+                href={item.href}
+              >
+                <span>{item.label}</span>
+                <ArrowRight className="h-4 w-4 text-primary" />
               </Link>
             ))}
           </CardContent>
@@ -135,7 +152,7 @@ export default async function DashboardPage() {
 
 function Row({ label, status, note }: { label: string; status: "ok" | "down"; note: string }) {
   return (
-    <div className="flex items-center justify-between rounded-md border p-3">
+    <div className="flex items-center justify-between gap-3 rounded-md border border-border/80 bg-background p-3">
       <div>
         <div className="font-medium">{label}</div>
         <div className="text-xs text-muted-foreground">{note}</div>
@@ -143,14 +160,14 @@ function Row({ label, status, note }: { label: string; status: "ok" | "down"; no
       <span
         className={
           status === "ok"
-            ? "inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-xs font-medium text-emerald-600"
+            ? "inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-1 text-xs font-medium text-primary"
             : "inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive"
         }
       >
         <span
           className={
             "h-1.5 w-1.5 rounded-full " +
-            (status === "ok" ? "bg-emerald-500" : "bg-destructive")
+            (status === "ok" ? "bg-primary" : "bg-destructive")
           }
         />
         {status === "ok" ? "operational" : "unreachable"}

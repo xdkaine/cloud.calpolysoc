@@ -18,6 +18,7 @@ type DynamoAttributeType = "S" | "N" | "B";
 
 type TableSummary = {
   name: string;
+  displayName?: string;
   status: string;
   itemCount: number;
   sizeBytes: number;
@@ -33,18 +34,19 @@ type FlashMessage = {
 };
 
 const selectClassName =
-  "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
+  "flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
 
 export function DynamoDbWorkspace() {
   const [tables, setTables] = useState<TableSummary[]>([]);
   const [items, setItems] = useState<Array<Record<string, unknown>>>([]);
   const [selectedTableName, setSelectedTableName] = useState<string | null>(null);
+  const [namespacePrefix, setNamespacePrefix] = useState("");
   const [newTableName, setNewTableName] = useState("");
   const [partitionKeyName, setPartitionKeyName] = useState("pk");
   const [partitionKeyType, setPartitionKeyType] = useState<DynamoAttributeType>("S");
   const [sortKeyName, setSortKeyName] = useState("");
   const [sortKeyType, setSortKeyType] = useState<DynamoAttributeType>("S");
-  const [itemDraft, setItemDraft] = useState('{\n  "pk": "tenant#example"\n}');
+  const [itemDraft, setItemDraft] = useState('{\n  "pk": "item#001"\n}');
   const [loadingTables, setLoadingTables] = useState(true);
   const [loadingItems, setLoadingItems] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -81,6 +83,7 @@ export function DynamoDbWorkspace() {
       }
 
       const nextTables = (data.tables ?? []) as TableSummary[];
+      setNamespacePrefix(data.namespace?.prefix ?? "");
       setTables(nextTables);
       setSelectedTableName((current) => {
         const candidates = [preferredTable, current, nextTables[0]?.name].filter(
@@ -95,6 +98,7 @@ export function DynamoDbWorkspace() {
     } catch (error: any) {
       setTables([]);
       setSelectedTableName(null);
+      setNamespacePrefix("");
       setFlashMessage({
         tone: "error",
         text: error?.message ?? "Failed to load DynamoDB tables",
@@ -158,7 +162,7 @@ export function DynamoDbWorkspace() {
 
       setNewTableName("");
       setFlashMessage({ tone: "success", text: `Created table ${tableName}.` });
-      await loadTables(tableName);
+      await loadTables(data?.tableName ?? tableName);
     } catch (error: any) {
       setFlashMessage({
         tone: "error",
@@ -290,13 +294,19 @@ export function DynamoDbWorkspace() {
     <div className="grid gap-6 xl:grid-cols-[minmax(320px,0.95fr)_minmax(0,1.45fr)]">
       <div className="space-y-6">
         <Card>
-          <CardHeader>
-            <CardTitle>Table registry</CardTitle>
+          <CardHeader className="border-b border-border/80">
+            <CardTitle className="text-primary">Table registry</CardTitle>
             <CardDescription>
-              Provision Floci-backed tables through the authenticated console facade with explicit key schema metadata.
+              Create and manage account-scoped tables.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 pt-6">
+            {namespacePrefix ? (
+              <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+                New tables are created inside your account namespace{" "}
+                <code>{namespacePrefix}</code>.
+              </div>
+            ) : null}
             <form className="space-y-3" onSubmit={createNewTable}>
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="table-name">
@@ -306,7 +316,7 @@ export function DynamoDbWorkspace() {
                   id="table-name"
                   value={newTableName}
                   onChange={(event) => setNewTableName(event.target.value)}
-                  placeholder="tenant-projects"
+                  placeholder="records"
                 />
               </div>
 
@@ -418,11 +428,13 @@ export function DynamoDbWorkspace() {
                       <div className="flex items-start justify-between gap-3">
                         <button
                           type="button"
-                          className="min-w-0 flex-1 text-left"
+                          className="min-h-11 min-w-0 flex-1 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                           onClick={() => setSelectedTableName(table.name)}
                         >
                           <div className="flex items-center gap-2">
-                            <div className="truncate font-medium">{table.name}</div>
+                            <div className="truncate font-medium">
+                              {table.displayName ?? table.name}
+                            </div>
                             <Badge
                               variant={table.status === "ACTIVE" ? "success" : "secondary"}
                             >
@@ -443,6 +455,11 @@ export function DynamoDbWorkspace() {
                               </span>
                             ) : null}
                           </div>
+                          {table.displayName ? (
+                            <div className="mt-2 truncate font-mono text-[11px] text-muted-foreground">
+                              {table.name}
+                            </div>
+                          ) : null}
                         </button>
                         <div className="flex items-center gap-2">
                           {isSelected ? <Badge variant="secondary">Selected</Badge> : null}
@@ -469,45 +486,24 @@ export function DynamoDbWorkspace() {
             )}
           </CardContent>
         </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>CLI parity</CardTitle>
-            <CardDescription>
-              The console writes the same core resources you would manage through DynamoDB CLI commands against the internal endpoint.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <pre className="overflow-x-auto rounded-md border bg-muted/40 p-4 text-xs leading-6 text-muted-foreground">
-{`export AWS_ENDPOINT_URL=http://api.cloud.calpolysoc.org
-export AWS_DEFAULT_REGION=us-east-1
-export AWS_ACCESS_KEY_ID=test
-export AWS_SECRET_ACCESS_KEY=test
-
-aws dynamodb list-tables --endpoint-url "$AWS_ENDPOINT_URL"
-aws dynamodb describe-table --table-name ${selectedTable?.name ?? "tenant-projects"} --endpoint-url "$AWS_ENDPOINT_URL"
-aws dynamodb scan --table-name ${selectedTable?.name ?? "tenant-projects"} --endpoint-url "$AWS_ENDPOINT_URL"`}
-            </pre>
-          </CardContent>
-        </Card>
       </div>
 
       <div className="space-y-6">
         <Card>
-          <CardHeader>
-            <CardTitle>Item workspace</CardTitle>
+          <CardHeader className="border-b border-border/80">
+            <CardTitle className="text-primary">Item workspace</CardTitle>
             <CardDescription>
               {selectedTable
-                ? `Insert and inspect records for ${selectedTable.name}.`
+                ? `Insert and inspect records for ${selectedTable.displayName ?? selectedTable.name}.`
                 : "Select a table to browse records and write new items."}
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 pt-6">
             {flashMessage ? (
               <FlashBanner flashMessage={flashMessage} />
             ) : null}
 
-            <form className="grid gap-3 rounded-lg border p-4" onSubmit={saveItem}>
+            <form className="grid gap-3 rounded-lg border border-border/80 bg-muted/25 p-4" onSubmit={saveItem}>
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="item-draft">
                   Item JSON
@@ -614,14 +610,14 @@ aws dynamodb scan --table-name ${selectedTable?.name ?? "tenant-projects"} --end
 
 function buildSampleItem(table: TableSummary) {
   const sample: Record<string, unknown> = {
-    [table.partitionKey ?? "pk"]: "tenant#example",
+    [table.partitionKey ?? "pk"]: "item#001",
   };
 
   if (table.sortKey) {
-    sample[table.sortKey] = "resource#001";
+    sample[table.sortKey] = "record#001";
   }
 
-  sample.displayName = "Example record";
+  sample.displayName = "New record";
   sample.updatedAt = new Date().toISOString();
 
   return JSON.stringify(sample, null, 2);
@@ -678,6 +674,7 @@ function buildItemKeyLabel(item: Record<string, unknown>, table: TableSummary, i
 function FlashBanner({ flashMessage }: { flashMessage: FlashMessage }) {
   return (
     <div
+      role={flashMessage.tone === "error" ? "alert" : "status"}
       className={`rounded-md border p-3 text-sm ${
         flashMessage.tone === "success"
           ? "border-primary/25 bg-primary/10 text-foreground"
@@ -691,7 +688,7 @@ function FlashBanner({ flashMessage }: { flashMessage: FlashMessage }) {
 
 function StateBlock({ text }: { text: string }) {
   return (
-    <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+    <div className="rounded-lg border border-dashed border-primary/25 bg-muted/35 p-8 text-center text-sm text-muted-foreground">
       {text}
     </div>
   );

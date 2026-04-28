@@ -15,6 +15,9 @@ import {
   getInstanceTypeCatalog,
 } from "@/lib/ec2-catalog";
 
+const selectClassName =
+  "flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
+
 export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -52,7 +55,7 @@ export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) 
           setSubmitting(false);
           setJobId(null);
           if (state === "failed") {
-            setError(data?.error ?? data?.message ?? "launch failed");
+            setError(formatLaunchError(data));
             return;
           }
           setTimeout(() => router.push("/instances"), 1200);
@@ -130,10 +133,14 @@ export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) 
       ? "rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm"
       : resultState === "failed"
         ? "rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
-        : "rounded-md border border-emerald-500/50 bg-emerald-500/10 p-3 text-sm";
+        : "rounded-md border border-primary/30 bg-primary/10 p-3 text-sm";
+  const resultTitleClassName =
+    resultState === "failed"
+      ? "font-medium text-destructive"
+      : "font-medium text-primary";
 
   return (
-    <form onSubmit={onSubmit} className="space-y-5">
+    <form onSubmit={onSubmit} className="space-y-6">
       <div className="space-y-2">
         <Label htmlFor="name">Instance name</Label>
         <Input
@@ -145,48 +152,52 @@ export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) 
           placeholder="my-app-server-01"
           value={name}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setName(e.target.value)}
+          aria-describedby="instance-name-help"
         />
-        <p className="text-xs text-muted-foreground">
+        <p id="instance-name-help" className="text-xs text-muted-foreground">
           Letters, numbers and dashes only.
         </p>
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="image">AMI / image</Label>
-        <select
-          id="image"
-          value={imageId}
-          onChange={(e: ChangeEvent<HTMLSelectElement>) => setImageId(e.target.value)}
-          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {capabilities.images.map((image) => (
-            <option key={image.id} value={image.id}>
-              {image.id} - {image.displayName}
-            </option>
-          ))}
-        </select>
-        <p className="text-xs text-muted-foreground">
-          Launch requests include the selected AMI id and live Proxmox template metadata so the EC2 wrapper can become image-aware without another frontend change.
-        </p>
-      </div>
+      <fieldset className="space-y-4 rounded-lg border border-border/80 bg-muted/25 p-4">
+        <legend className="px-1 text-sm font-semibold text-primary">
+          Image and size
+        </legend>
+        <div className="space-y-2">
+          <Label htmlFor="image">AMI / image</Label>
+          <select
+            id="image"
+            value={imageId}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => setImageId(e.target.value)}
+            className={selectClassName}
+          >
+            {capabilities.images.map((image) => (
+              <option key={image.id} value={image.id}>
+                {image.id} - {image.displayName}
+              </option>
+            ))}
+          </select>
+        </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="type">Instance type</Label>
-        <select
-          id="type"
-          value={instanceType}
-          onChange={(e: ChangeEvent<HTMLSelectElement>) =>
-            setInstanceType(e.target.value)
-          }
-          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {capabilities.instanceCatalog.map((typeOption) => (
-            <option key={typeOption.value} value={typeOption.value}>
-              {formatInstanceTypeLabel(typeOption)}
-            </option>
-          ))}
-        </select>
-        <div className="rounded-lg border bg-muted/30 p-4">
+        <div className="space-y-2">
+          <Label htmlFor="type">Instance type</Label>
+          <select
+            id="type"
+            value={instanceType}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) =>
+              setInstanceType(e.target.value)
+            }
+            className={selectClassName}
+          >
+            {capabilities.instanceCatalog.map((typeOption) => (
+              <option key={typeOption.value} value={typeOption.value}>
+                {formatInstanceTypeLabel(typeOption)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="rounded-lg border border-border/80 bg-background p-4">
           <div className="text-sm font-medium">Selected server profile</div>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <LaunchFact label="Instance size" value={selectedType.value} />
@@ -213,18 +224,8 @@ export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) 
               value={`${capabilities.serverProfile.storage} via ${capabilities.serverProfile.bridge}`}
             />
           </div>
-          <p className="mt-3 text-xs text-muted-foreground">
-            Current launches always send
-            {" "}<code className="rounded bg-background px-1 py-0.5 text-xs">name</code>,
-            {" "}<code className="rounded bg-background px-1 py-0.5 text-xs">instance_type</code>, and
-            {" "}<code className="rounded bg-background px-1 py-0.5 text-xs">password</code>
-            plus image metadata fields such as
-            {" "}<code className="rounded bg-background px-1 py-0.5 text-xs">image_id</code> and
-            {" "}<code className="rounded bg-background px-1 py-0.5 text-xs">template_vmid</code>.
-            The current wrapper can ignore those extras until it is updated to launch from the selected template.
-          </p>
         </div>
-      </div>
+      </fieldset>
 
       <div className="space-y-2">
         <Label htmlFor="password">
@@ -237,39 +238,44 @@ export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) 
           minLength={8}
           placeholder="ChangeMe123!"
           value={password}
+          autoComplete="new-password"
           onChange={(e: ChangeEvent<HTMLInputElement>) =>
             setPassword(e.target.value)
           }
+          aria-describedby="password-help"
         />
-        <p className="text-xs text-muted-foreground">
-          Set on the <code className="rounded bg-muted px-1 py-0.5 text-xs">{selectedImage.username}</code> user via cloud-init.
+        <p id="password-help" className="text-xs text-muted-foreground">
+          Store this password securely. It is only used to initialize the VM
+          cloud-init account.
         </p>
       </div>
 
       {error ? (
-        <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+        <div role="alert" className="whitespace-pre-wrap rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
           {error}
         </div>
       ) : null}
 
       {result ? (
-        <div className={resultClassName}>
-          <div className="font-medium text-emerald-700 dark:text-emerald-400">
-            {resultTitle}
-          </div>
+        <div className={resultClassName} aria-live="polite">
+          <div className={resultTitleClassName}>{resultTitle}</div>
           <p className="mt-2 text-xs text-muted-foreground">
             {result?.message ??
               (jobId
                 ? "Provisioning is running in the background. This page will redirect when the job reaches a terminal state."
                 : "The launch request was accepted.")}
           </p>
-          <pre className="mt-2 overflow-x-auto text-xs">
-            {JSON.stringify(result, null, 2)}
-          </pre>
+          {Array.isArray(result?.warnings) && result.warnings.length > 0 ? (
+            <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+              {result.warnings.map((warning: string) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       ) : null}
 
-      <div className="flex items-center gap-2 pt-2">
+      <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:items-center sm:justify-end">
         <Button type="submit" disabled={submitting}>
           {submitting ? (
             <>
@@ -290,6 +296,19 @@ export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) 
       </div>
     </form>
   );
+}
+
+function formatLaunchError(data: any) {
+  const message = data?.error ?? data?.message ?? "launch failed";
+  const stderr = typeof data?.launch?.stderr === "string"
+    ? data.launch.stderr.trim()
+    : "";
+  const stdout = typeof data?.launch?.stdout === "string"
+    ? data.launch.stdout.trim()
+    : "";
+  const detail = stderr || stdout;
+  if (!detail || message.includes(detail)) return message;
+  return `${message}\n\n${detail}`;
 }
 
 function LaunchFact({ label, value }: { label: string; value: string }) {

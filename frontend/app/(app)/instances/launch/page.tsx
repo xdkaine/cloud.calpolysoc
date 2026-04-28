@@ -1,6 +1,6 @@
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LaunchForm } from "./_components/launch-form";
 import {
   formatInstanceTypeSummary,
@@ -26,33 +26,27 @@ export default async function LaunchPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Launch instance"
-        description="Launch against the live Proxmox template catalog and the active EC2 size profile"
+        description="Choose an approved image and size, then provision a Proxmox-backed server in your account scope."
       />
       <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
         <Card>
-          <CardHeader>
-            <CardTitle>Configure instance</CardTitle>
-            <CardDescription>
-              Backed by the active Proxmox cloud-init templates and the console's launch-size catalog.
-            </CardDescription>
+          <CardHeader className="border-b border-border/80">
+            <CardTitle className="text-primary">Configure instance</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-6">
             <LaunchForm capabilities={capabilities} />
           </CardContent>
         </Card>
 
         <div className="space-y-6">
           <Card>
-            <CardHeader>
+            <CardHeader className="border-b border-border/80">
               <div className="flex items-center gap-2">
-                <CardTitle>Current server profile</CardTitle>
+                <CardTitle className="text-primary">Server profile</CardTitle>
                 <Badge variant="secondary">{sourceBadgeLabel(capabilities.source)}</Badge>
               </div>
-              <CardDescription>
-                These values are read at request time, so newly discovered templates appear without rebuilding the console.
-              </CardDescription>
             </CardHeader>
-            <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+            <CardContent className="grid gap-4 pt-6 sm:grid-cols-2 xl:grid-cols-1">
               <ProfileRow label="Image" value={`${selectedImage.id} (${selectedImage.displayName})`} />
               <ProfileRow label="Template" value={`${selectedImage.templateName} (${selectedImage.templateVmid})`} />
               <ProfileRow label="Node" value={capabilities.serverProfile.node} />
@@ -65,15 +59,12 @@ export default async function LaunchPage() {
           </Card>
 
           <Card>
-            <CardHeader>
-              <CardTitle>Supported sizes</CardTitle>
-              <CardDescription>
-                Instance sizes are defined in the console while images are discovered live from Proxmox.
-              </CardDescription>
+            <CardHeader className="border-b border-border/80">
+              <CardTitle className="text-primary">Supported sizes</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-3 pt-6">
               {capabilities.instanceCatalog.map((item) => (
-                <div key={item.value} className="rounded-lg border p-3">
+                <div key={item.value} className="rounded-lg border border-border/80 bg-background p-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="font-medium">{item.value}</div>
                     <Badge variant="outline">{item.family}</Badge>
@@ -81,7 +72,6 @@ export default async function LaunchPage() {
                   <div className="mt-1 text-sm text-muted-foreground">
                     {formatInstanceTypeSummary(item)}
                   </div>
-                  <p className="mt-2 text-xs text-muted-foreground">{item.description}</p>
                 </div>
               ))}
             </CardContent>

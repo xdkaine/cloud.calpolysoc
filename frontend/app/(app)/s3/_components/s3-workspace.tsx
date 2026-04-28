@@ -7,13 +7,12 @@ import {
   type ChangeEvent,
   type FormEvent,
 } from "react";
-import { Loader2, RefreshCw, Trash2, Upload } from "lucide-react";
+import { Download, Loader2, RefreshCw, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -22,7 +21,9 @@ import { formatBytes, formatDate } from "@/lib/utils";
 
 type BucketSummary = {
   name: string;
+  displayName?: string;
   creationDate?: string;
+  ownedByCurrentUser?: boolean;
 };
 
 type ObjectSummary = {
@@ -41,6 +42,7 @@ export function S3Workspace() {
   const [buckets, setBuckets] = useState<BucketSummary[]>([]);
   const [objects, setObjects] = useState<ObjectSummary[]>([]);
   const [selectedBucket, setSelectedBucket] = useState<string | null>(null);
+  const [namespacePrefix, setNamespacePrefix] = useState("");
   const [newBucketName, setNewBucketName] = useState("");
   const [objectKey, setObjectKey] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -73,6 +75,7 @@ export function S3Workspace() {
       }
 
       const nextBuckets = (data.buckets ?? []) as BucketSummary[];
+      setNamespacePrefix(data.namespace?.prefix ?? "");
       setBuckets(nextBuckets);
       setSelectedBucket((current) => {
         const candidates = [preferredBucket, current, nextBuckets[0]?.name].filter(
@@ -87,6 +90,7 @@ export function S3Workspace() {
     } catch (error: any) {
       setBuckets([]);
       setSelectedBucket(null);
+      setNamespacePrefix("");
       setFlashMessage({
         tone: "error",
         text: error?.message ?? "Failed to load S3 buckets",
@@ -141,7 +145,7 @@ export function S3Workspace() {
 
       setNewBucketName("");
       setFlashMessage({ tone: "success", text: `Created bucket ${bucketName}.` });
-      await loadBuckets(bucketName);
+      await loadBuckets(data?.bucket ?? bucketName);
     } catch (error: any) {
       setFlashMessage({
         tone: "error",
@@ -262,17 +266,25 @@ export function S3Workspace() {
     }
   }
 
+  const selectedBucketSummary =
+    buckets.find((bucket) => bucket.name === selectedBucket) ?? null;
+  const selectedBucketLabel =
+    selectedBucketSummary?.displayName ?? selectedBucketSummary?.name ?? selectedBucket;
+
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(300px,0.95fr)_minmax(0,1.45fr)]">
       <div className="space-y-6">
         <Card>
-          <CardHeader>
-            <CardTitle>Bucket registry</CardTitle>
-            <CardDescription>
-              Create, inspect, and delete Floci-backed buckets through the authenticated console facade.
-            </CardDescription>
+          <CardHeader className="border-b border-border/80">
+            <CardTitle className="text-primary">Buckets</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 pt-6">
+            {namespacePrefix ? (
+              <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+                New buckets are created inside your account namespace{" "}
+                <code>{namespacePrefix}</code>.
+              </div>
+            ) : null}
             <form className="space-y-3" onSubmit={createNewBucket}>
               <label className="text-sm font-medium" htmlFor="bucket-name">
                 New bucket
@@ -282,7 +294,7 @@ export function S3Workspace() {
                   id="bucket-name"
                   value={newBucketName}
                   onChange={(event) => setNewBucketName(event.target.value)}
-                  placeholder="project-artifacts"
+                  placeholder="artifacts"
                   pattern="^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
                 />
                 <Button
@@ -335,13 +347,20 @@ export function S3Workspace() {
                       <div className="flex items-start justify-between gap-3">
                         <button
                           type="button"
-                          className="min-w-0 flex-1 text-left"
+                          className="min-h-11 min-w-0 flex-1 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                           onClick={() => setSelectedBucket(bucket.name)}
                         >
-                          <div className="truncate font-medium">{bucket.name}</div>
+                          <div className="truncate font-medium">
+                            {bucket.displayName ?? bucket.name}
+                          </div>
                           <div className="mt-1 text-xs text-muted-foreground">
                             Created {formatDate(bucket.creationDate)}
                           </div>
+                          {bucket.displayName ? (
+                            <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                              {bucket.name}
+                            </div>
+                          ) : null}
                         </button>
                         <div className="flex items-center gap-2">
                           {isSelected ? <Badge variant="secondary">Selected</Badge> : null}
@@ -368,42 +387,17 @@ export function S3Workspace() {
             )}
           </CardContent>
         </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>CLI parity</CardTitle>
-            <CardDescription>
-              Every action here still maps cleanly to standard AWS CLI commands against the internal Floci endpoint.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <pre className="overflow-x-auto rounded-md border bg-muted/40 p-4 text-xs leading-6 text-muted-foreground">
-{`export AWS_ENDPOINT_URL=http://api.cloud.calpolysoc.org
-export AWS_DEFAULT_REGION=us-east-1
-export AWS_ACCESS_KEY_ID=test
-export AWS_SECRET_ACCESS_KEY=test
-
-aws s3api list-buckets
-aws s3api create-bucket --bucket ${selectedBucket ?? "project-artifacts"}
-aws s3 ls s3://${selectedBucket ?? "project-artifacts"}/`}
-            </pre>
-          </CardContent>
-        </Card>
       </div>
 
       <div className="space-y-6">
         <Card>
-          <CardHeader>
-            <CardTitle>Object workspace</CardTitle>
-            <CardDescription>
-              {selectedBucket
-                ? `Upload and manage objects in ${selectedBucket}.`
-                : "Select a bucket to inspect and manage its objects."}
-            </CardDescription>
+          <CardHeader className="border-b border-border/80">
+            <CardTitle className="text-primary">Objects</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 pt-6">
             {flashMessage ? (
               <div
+                role={flashMessage.tone === "error" ? "alert" : "status"}
                 className={`rounded-md border p-3 text-sm ${
                   flashMessage.tone === "success"
                     ? "border-primary/25 bg-primary/10 text-foreground"
@@ -414,7 +408,7 @@ aws s3 ls s3://${selectedBucket ?? "project-artifacts"}/`}
               </div>
             ) : null}
 
-            <form className="grid gap-3 rounded-lg border p-4" onSubmit={uploadObject}>
+            <form className="grid gap-3 rounded-lg border border-border/80 bg-muted/25 p-4" onSubmit={uploadObject}>
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="object-key">
@@ -445,9 +439,6 @@ aws s3 ls s3://${selectedBucket ?? "project-artifacts"}/`}
               </div>
 
               <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
-                <p className="text-xs text-muted-foreground">
-                  Uploads are sent through the authenticated console facade instead of directly from this page to Floci.
-                </p>
                 <Button
                   type="submit"
                   disabled={!selectedBucket || !selectedFile || busyAction === "upload-object"}
@@ -465,13 +456,13 @@ aws s3 ls s3://${selectedBucket ?? "project-artifacts"}/`}
             {!selectedBucket ? (
               <StateBlock text="Select a bucket to view objects and upload files." />
             ) : loadingObjects ? (
-              <StateBlock text={`Loading objects for ${selectedBucket}...`} />
+              <StateBlock text={`Loading objects for ${selectedBucketLabel}...`} />
             ) : objects.length === 0 ? (
-              <StateBlock text={`No objects yet in ${selectedBucket}. Upload one to get started.`} />
+              <StateBlock text={`No objects yet in ${selectedBucketLabel}.`} />
             ) : (
               <div className="overflow-hidden rounded-lg border">
                 <table className="w-full text-sm">
-                  <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
+              <thead className="bg-muted/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
                     <tr>
                       <th className="px-4 py-3 font-medium">Object</th>
                       <th className="px-4 py-3 font-medium">Modified</th>
@@ -492,20 +483,32 @@ aws s3 ls s3://${selectedBucket ?? "project-artifacts"}/`}
                             {formatBytes(object.size)}
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              disabled={isDeleting}
-                              onClick={() => void removeObject(object.key)}
-                            >
-                              {isDeleting ? (
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              ) : (
-                                <Trash2 className="mr-2 h-4 w-4" />
-                              )}
-                              Delete
-                            </Button>
+                            <div className="inline-flex items-center gap-1">
+                              <Button asChild type="button" variant="ghost" size="sm">
+                                <a
+                                  href={`/api/aws/s3?bucket=${encodeURIComponent(
+                                    selectedBucket,
+                                  )}&key=${encodeURIComponent(object.key)}`}
+                                >
+                                  <Download className="mr-2 h-4 w-4" />
+                                  Download
+                                </a>
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                disabled={isDeleting}
+                                onClick={() => void removeObject(object.key)}
+                              >
+                                {isDeleting ? (
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="mr-2 h-4 w-4" />
+                                )}
+                                Delete
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -523,7 +526,7 @@ aws s3 ls s3://${selectedBucket ?? "project-artifacts"}/`}
 
 function StateBlock({ text }: { text: string }) {
   return (
-    <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+    <div className="rounded-lg border border-dashed border-primary/25 bg-muted/35 p-8 text-center text-sm text-muted-foreground">
       {text}
     </div>
   );

@@ -19,10 +19,10 @@ This platform is **not exposed publicly**. Users must be on the VPN/private netw
 ```text
 VPN / Internal User
   -> AD DNS
-  -> api.cloud.calpolysoc.org
-  -> Nginx on aws VM
-      -> /                 -> Floci :4566
-      -> /ec2/             -> EC2 API wrapper :8090
+  -> cloud.calpolysoc.org
+  -> Next.js console with Keycloak session
+      -> /api/aws/*        -> tenant-scoped Floci calls
+      -> /api/ec2/*        -> signed internal EC2 wrapper calls
           -> cloudctl
           -> Proxmox API
           -> clone/start/stop/delete VMs
@@ -32,10 +32,10 @@ High-level service layout:
 
 ```text
 cloud.calpolysoc.org
-  Future frontend dashboard
+  Authenticated web console
 
 api.cloud.calpolysoc.org
-  Internal API endpoint
+  Service endpoint restricted to console/backend callers
 
 api.cloud.calpolysoc.org/
   Floci-backed AWS services:
@@ -95,7 +95,7 @@ The public-facing/internal-facing API hostname is:
 api.cloud.calpolysoc.org
 ```
 
-Current working services:
+Console-managed services:
 
 ```text
 S3
@@ -103,7 +103,7 @@ DynamoDB
 SQS
 ```
 
-Tested resources:
+Legacy smoke-test resources:
 
 ```text
 S3 bucket:        mvp-demo-bucket
@@ -452,17 +452,11 @@ In the background launch worker, call `assign_vm_acl(vmid, principal)` after
 `cloudctl run-instance` succeeds and expose the current job state through
 `GET /ec2/jobs/<job_id>`.
 
-The canonical deployable wrapper now lives at `deploy/ec2-api.py` in this
-repository.
-
-For Windows-based deployment, `deploy/apply-ec2-wrapper.ps1` backs up the
-current wrapper, copies the canonical wrapper to the aws VM, restarts
-`calpoly-ec2-api`, and verifies `http://127.0.0.1:8090/health`.
-
-For deployment directly on the aws VM, `deploy/apply-ec2-wrapper.sh`
-backs up the current wrapper, installs the canonical wrapper from the
-repo clone, restarts `calpoly-ec2-api`, and verifies the same local health
-endpoint.
+The canonical deployable wrapper now lives at `deploy/calpoly-cloud/ec2-api.py`
+in this repository, alongside the matching `deploy/calpoly-cloud/cloudctl`.
+After copying both files to the aws VM, install `cloudctl` to
+`/usr/local/bin/cloudctl`, keep the wrapper at `/opt/calpoly-cloud/ec2-api.py`,
+restart `calpoly-ec2-api`, and verify `http://127.0.0.1:8090/health`.
 
 For slow clone/start operations, the console nginx vhost in
 `deploy/nginx/cloud.calpolysoc.org.conf` still uses a 600 second read/send
@@ -684,25 +678,29 @@ audit_logs
 
 ### 4. Authentication and Authorization
 
-Currently, the EC2 API is internal-only but does not yet enforce proper user-level auth.
+The web console uses Keycloak/OIDC and forwards validated identity to the
+internal service routes. Browser access to S3, DynamoDB, and SQS is scoped by a
+per-user namespace derived from the Keycloak subject. EC2 lifecycle calls are
+proxied through the console and require the same `CLOUD_API_INTERNAL_TOKEN` on
+both the console and EC2 wrapper.
 
-Needed:
-
-```text
-Keycloak/OIDC for frontend users
-API keys or tokens for programmatic access
-Role-based access control
-Per-user or per-project quotas
-Audit logs
-```
-
-Recommended roles:
+Supported console roles:
 
 ```text
 cloud-admin
+cloud-staff
+cloud-operator
+cloud-support
 cloud-user
-cloud-readonly
-project-admin
+```
+
+Remaining backend work:
+
+```text
+Per-user programmatic service keys
+Per-project resource ownership
+Quotas
+Persistent audit-log storage volume
 ```
 
 ---
@@ -722,6 +720,13 @@ Then update:
 
 ```text
 /etc/calpoly-cloud/proxmox.env
+```
+
+Also set a shared console-to-wrapper token in both the console environment and
+`/etc/calpoly-cloud/proxmox.env`:
+
+```text
+CLOUD_API_INTERNAL_TOKEN=<random secret>
 ```
 
 Restart EC2 API:

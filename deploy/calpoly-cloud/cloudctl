@@ -1,7 +1,7 @@
-root@aws:/opt/calpoly-cloud# cat cloudctl
 #!/usr/bin/env python3
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -13,12 +13,21 @@ import requests
 requests.packages.urllib3.disable_warnings()
 
 ENV_FILE = "/etc/calpoly-cloud/proxmox.env"
+OWNER_METADATA_PREFIX = "calpolysoc_owner="
 
 INSTANCE_TYPES = {
-    "t3.nano":   {"cores": 1, "memory": 512},
-    "t3.micro":  {"cores": 1, "memory": 1024},
-    "t3.small":  {"cores": 1, "memory": 2048},
+    "t3.nano": {"cores": 1, "memory": 512},
+    "t3.micro": {"cores": 1, "memory": 1024},
+    "t3.small": {"cores": 1, "memory": 2048},
     "t3.medium": {"cores": 2, "memory": 4096},
+    "t3.large": {"cores": 2, "memory": 8192},
+    "t3.xlarge": {"cores": 4, "memory": 16384},
+    "c6i.large": {"cores": 2, "memory": 4096},
+    "c6i.xlarge": {"cores": 4, "memory": 8192},
+    "m6i.large": {"cores": 2, "memory": 8192},
+    "m6i.xlarge": {"cores": 4, "memory": 16384},
+    "r6i.large": {"cores": 2, "memory": 16384},
+    "r6i.xlarge": {"cores": 4, "memory": 32768},
 }
 
 
@@ -27,60 +36,118 @@ def load_env():
         print(f"Missing config: {ENV_FILE}", file=sys.stderr)
         sys.exit(1)
 
-    with open(ENV_FILE) as f:
-        for line in f:
-            line = line.strip()
+    with open(ENV_FILE, encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
-            k, v = line.split("=", 1)
-            os.environ[k] = v
+            if line.startswith("export "):
+                line = line[len("export ") :]
+            key, value = line.split("=", 1)
+            os.environ[key.strip()] = value.strip().strip('"').strip("'")
+
+
+def env_bool(name, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def coerce_int(value):
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def parse_owner_metadata(description):
+    for line in (description or "").splitlines():
+        if not line.startswith(OWNER_METADATA_PREFIX):
+            continue
+
+        encoded = line[len(OWNER_METADATA_PREFIX) :].strip()
+        try:
+            decoded = urllib.parse.unquote(encoded)
+            payload = json.loads(decoded)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+        if isinstance(payload, dict):
+            return payload
+
+    return None
+
+
+def infer_instance_type(config, vm):
+    cores = coerce_int(config.get("cores")) or coerce_int(vm.get("cpus"))
+    memory_mib = coerce_int(config.get("memory"))
+    if memory_mib is None:
+        maxmem = coerce_int(vm.get("maxmem"))
+        if maxmem:
+            memory_mib = maxmem // 1024 // 1024
+
+    for name, spec in INSTANCE_TYPES.items():
+        if cores == spec["cores"] and memory_mib == spec["memory"]:
+            return name
+
+    return None
 
 
 class Proxmox:
-    def __init__(self):
+    def __init__(self, template_id=None):
         self.host = os.environ["PROXMOX_HOST"]
         self.node = os.environ["PROXMOX_NODE"]
         self.token_id = os.environ["PROXMOX_TOKEN_ID"]
         self.token_secret = os.environ["PROXMOX_TOKEN_SECRET"]
-        self.template_id = int(os.environ.get("PROXMOX_TEMPLATE_ID", "9001"))
+        self.template_id = int(template_id or os.environ.get("PROXMOX_TEMPLATE_ID", "9001"))
         self.storage = os.environ.get("PROXMOX_STORAGE", "local-lvm")
         self.bridge = os.environ.get("PROXMOX_BRIDGE", "vmbr0")
-        self.base = f"https://{self.host}:8006/api2/json"
+        protocol = os.environ.get("PROXMOX_PROTOCOL", "https")
+        port = os.environ.get("PROXMOX_PORT", "8006")
+        self.base = os.environ.get(
+            "PROXMOX_API_BASE_URL",
+            f"{protocol}://{self.host}:{port}",
+        ).rstrip("/")
+        if not self.base.endswith("/api2/json"):
+            self.base += "/api2/json"
+        self.verify = not env_bool("PROXMOX_ALLOW_INSECURE_TLS", default=True)
         self.headers = {
             "Authorization": f"PVEAPIToken={self.token_id}={self.token_secret}"
         }
 
     def get(self, path):
-        r = requests.get(
+        response = requests.get(
             f"{self.base}{path}",
             headers=self.headers,
-            verify=False,
+            verify=self.verify,
             timeout=30,
         )
-        self.check(r)
-        return r.json()["data"]
+        self.check(response)
+        return response.json()["data"]
 
     def post(self, path, data=None):
-        r = requests.post(
+        response = requests.post(
             f"{self.base}{path}",
             headers=self.headers,
             data=data or {},
-            verify=False,
+            verify=self.verify,
             timeout=60,
         )
-        self.check(r)
-        return r.json().get("data")
+        self.check(response)
+        return response.json().get("data")
 
     def delete(self, path, data=None):
-        r = requests.delete(
+        response = requests.delete(
             f"{self.base}{path}",
             headers=self.headers,
             params=data or {},
-            verify=False,
+            verify=self.verify,
             timeout=60,
         )
-        self.check(r)
-        return r.json().get("data")
+        self.check(response)
+        return response.json().get("data")
 
     def check(self, response):
         if response.status_code >= 400:
@@ -161,12 +228,48 @@ class Proxmox:
     def status_vm(self, vmid):
         return self.get(f"/nodes/{self.node}/qemu/{vmid}/status/current")
 
+    def config_vm(self, vmid):
+        return self.get(f"/nodes/{self.node}/qemu/{vmid}/config")
+
     def list_vms(self):
         return self.get(f"/nodes/{self.node}/qemu")
 
 
+def format_instance(pve, vm):
+    vmid = int(vm.get("vmid"))
+    config = pve.config_vm(vmid)
+    owner = parse_owner_metadata(config.get("description"))
+    memory_mib = coerce_int(config.get("memory"))
+    maxmem = coerce_int(vm.get("maxmem"))
+    if maxmem is None and memory_mib is not None:
+        maxmem = memory_mib * 1024 * 1024
+
+    instance = {
+        "instance_id": f"i-{vmid:08d}",
+        "vmid": vmid,
+        "name": vm.get("name") or config.get("name"),
+        "status": vm.get("status"),
+        "node": vm.get("node") or pve.node,
+        "cpus": coerce_int(vm.get("cpus")) or coerce_int(config.get("cores")),
+        "maxmem": maxmem,
+        "uptime": coerce_int(vm.get("uptime")),
+        "instance_type": (
+            (owner or {}).get("instance_type")
+            or infer_instance_type(config, vm)
+        ),
+    }
+
+    if owner:
+        instance["owner"] = owner
+        instance["owner_principal"] = owner.get("principal") or owner.get("acl_subject")
+        instance["owner_email"] = owner.get("email")
+
+    return instance
+
+
 def run_instance(args):
-    pve = Proxmox()
+    template_id = args.template_vmid or args.template_id
+    pve = Proxmox(template_id=template_id)
 
     if args.instance_type not in INSTANCE_TYPES:
         print(f"Unsupported instance type: {args.instance_type}", file=sys.stderr)
@@ -200,16 +303,32 @@ def run_instance(args):
 
 def describe_instances(args):
     pve = Proxmox()
+    instances = []
+
     for vm in pve.list_vms():
         vmid = int(vm.get("vmid"))
         if args.vmid and vmid != int(args.vmid):
             continue
+
+        if args.json:
+            instances.append(format_instance(pve, vm))
+            continue
+
+        owner = parse_owner_metadata(pve.config_vm(vmid).get("description"))
+        owner_suffix = ""
+        if owner:
+            owner_suffix = f"  owner={owner.get('principal') or owner.get('email')}"
+
         print(
             f"i-{vmid:08d}  "
             f"vmid={vmid}  "
             f"name={vm.get('name')}  "
             f"state={vm.get('status')}"
+            f"{owner_suffix}"
         )
+
+    if args.json:
+        print(json.dumps({"instances": instances}, indent=2, sort_keys=True))
 
 
 def start_instance(args):
@@ -239,6 +358,9 @@ def main():
     run = sub.add_parser("run-instance")
     run.add_argument("--name", required=True)
     run.add_argument("--ami", default="ami-ubuntu-2404")
+    run.add_argument("--template-vmid")
+    run.add_argument("--template-id")
+    run.add_argument("--template-name")
     run.add_argument("--instance-type", default="t3.small")
     run.add_argument("--user", default="ubuntu")
     run.add_argument("--password", default="ChangeMe123!")
@@ -246,6 +368,7 @@ def main():
 
     desc = sub.add_parser("describe-instances")
     desc.add_argument("--vmid")
+    desc.add_argument("--json", action="store_true")
     desc.set_defaults(func=describe_instances)
 
     start = sub.add_parser("start-instance")

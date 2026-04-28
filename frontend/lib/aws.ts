@@ -2,6 +2,7 @@ import {
   CreateBucketCommand,
   DeleteBucketCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
   ListBucketsCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -80,6 +81,16 @@ export async function listObjects(bucket: string) {
     size: o.Size ?? 0,
     lastModified: o.LastModified?.toISOString(),
   }));
+}
+
+export async function getObject(bucket: string, key: string) {
+  const r = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  const body = r.Body ? await r.Body.transformToByteArray() : new Uint8Array();
+  return {
+    body,
+    contentType: r.ContentType,
+    contentLength: r.ContentLength,
+  };
 }
 
 export async function createBucket(bucket: string) {

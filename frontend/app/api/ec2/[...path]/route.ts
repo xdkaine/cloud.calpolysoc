@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { API_BASE } from "@/lib/api";
+import { recordAuditEvent } from "@/lib/audit";
+import { API_BASE, applyConsoleIdentityHeaders } from "@/lib/api";
+import { getTenantIdentity } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -10,10 +12,21 @@ async function forward(req: NextRequest, path: string[]) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  const internalToken =
+    process.env.CLOUD_API_INTERNAL_TOKEN?.trim() ||
+    process.env.EC2_API_INTERNAL_TOKEN?.trim();
+  if (!internalToken) {
+    return NextResponse.json(
+      { error: "EC2 internal auth token is not configured" },
+      { status: 503 },
+    );
+  }
+
   const url = new URL(req.url);
   const upstream = `${API_BASE}/ec2/${path.join("/")}${url.search}`;
   const headers = filterHeaders(req.headers);
-  applySessionIdentityHeaders(headers, session.user);
+  applyConsoleIdentityHeaders(headers, session.user);
+  headers.set("X-Console-Internal-Token", internalToken);
   if (session.accessToken) {
     headers.set("Authorization", `Bearer ${session.accessToken}`);
   }
@@ -27,6 +40,20 @@ async function forward(req: NextRequest, path: string[]) {
   }
   const r = await fetch(upstream, init);
   const body = await r.arrayBuffer();
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    const identity = getTenantIdentity(session.user);
+    await recordAuditEvent({
+      actor: identity,
+      action: `ec2.${req.method.toLowerCase()}`,
+      resourceType: "ec2",
+      resourceId: path.join("/"),
+      result: r.ok ? "success" : "failure",
+      status: r.status,
+      message: r.ok
+        ? undefined
+        : new TextDecoder().decode(body).slice(0, 500),
+    });
+  }
   return new NextResponse(body, {
     status: r.status,
     headers: passThroughHeaders(r.headers),
@@ -47,40 +74,13 @@ function filterHeaders(h: Headers) {
         "x-console-user-name",
         "x-console-user-roles",
         "x-console-auth-source",
+        "x-console-internal-token",
       ].includes(k.toLowerCase())
     )
       return;
     out.set(k, v);
   });
   return out;
-}
-
-function applySessionIdentityHeaders(
-  headers: Headers,
-  user: {
-    id?: string;
-    email?: string | null;
-    name?: string | null;
-    roles?: string[];
-  },
-) {
-  if (user.id) {
-    headers.set("X-Console-User-Id", user.id);
-  }
-
-  if (user.email) {
-    headers.set("X-Console-User-Email", user.email);
-  }
-
-  if (user.name) {
-    headers.set("X-Console-User-Name", user.name);
-  }
-
-  if (user.roles?.length) {
-    headers.set("X-Console-User-Roles", user.roles.join(","));
-  }
-
-  headers.set("X-Console-Auth-Source", "nextauth-keycloak");
 }
 
 function passThroughHeaders(h: Headers) {

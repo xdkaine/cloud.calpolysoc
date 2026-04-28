@@ -18,7 +18,7 @@ export default async function SettingsPage() {
     return (
       <AccessDenied
         title="Platform settings"
-        description="Image catalogs, template bootstrap commands, and service-level controls live here."
+        description="Image catalogs and service-level controls live here."
       />
     );
   }
@@ -30,7 +30,7 @@ export default async function SettingsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Platform settings"
-        description="Console configuration, live image catalog, and template bootstrap tooling for staff"
+        description="Console configuration, access context, and live image catalog for staff."
       />
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
         <div className="space-y-6">
@@ -40,7 +40,7 @@ export default async function SettingsPage() {
         <div className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Endpoints</CardTitle>
+              <CardTitle className="text-primary">Endpoints</CardTitle>
             </CardHeader>
             <CardContent>
               <dl className="grid grid-cols-1 gap-3 text-sm">
@@ -57,7 +57,7 @@ export default async function SettingsPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Access context</CardTitle>
+              <CardTitle className="text-primary">Access context</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <StatusRow label="Console audience" value={access.label} />
@@ -90,7 +90,7 @@ export default async function SettingsPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Live catalog status</CardTitle>
+              <CardTitle className="text-primary">Live catalog status</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <StatusRow

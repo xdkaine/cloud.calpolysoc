@@ -13,7 +13,7 @@ export default function ComingSoon({
       <PageHeader title={title} description={description} />
       <Card>
         <CardContent className="flex flex-col items-center justify-center gap-2 p-16 text-center">
-          <div className="text-sm font-medium">Coming soon</div>
+          <div className="text-sm font-medium text-primary">Coming soon</div>
           <p className="max-w-md text-sm text-muted-foreground">
             This module isn&apos;t wired up to an internal API yet. Track
             progress in the project README under &quot;Things Still Left To Do&quot;.

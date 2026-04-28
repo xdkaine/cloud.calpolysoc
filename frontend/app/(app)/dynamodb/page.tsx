@@ -8,7 +8,7 @@ export default async function DynamoPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="DynamoDB Tables"
-        description="Key-value tables backed by Floci and managed through authenticated console workflows"
+        description="Create scoped tables, inspect records, and write JSON items."
       />
       <DynamoDbWorkspace />
     </div>

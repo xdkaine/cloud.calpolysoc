@@ -8,7 +8,7 @@ export default async function SqsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="SQS Queues"
-        description="Messaging backed by Floci and managed through authenticated console workflows"
+        description="Create queues, send messages, poll visible messages, and purge test traffic."
       />
       <SqsWorkspace />
     </div>

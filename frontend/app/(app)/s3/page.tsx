@@ -8,7 +8,7 @@ export default async function S3Page() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="S3 Buckets"
-        description="Object storage backed by Floci and managed through authenticated console workflows"
+        description="Create account-scoped buckets, upload objects, and manage stored files."
       />
       <S3Workspace />
     </div>
