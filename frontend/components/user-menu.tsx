@@ -6,10 +6,12 @@ export function UserMenu({
   name,
   email,
   roles,
+  audienceLabel,
 }: {
   name: string;
   email?: string;
   roles?: string[];
+  audienceLabel?: string;
 }) {
   const initials = (name || email || "?")
     .split(/[\s@.]+/)
@@ -24,9 +26,10 @@ export function UserMenu({
         <div className="font-medium">{name}</div>
         {email && name !== email ? (
           <div className="text-muted-foreground">{email}</div>
-        ) : roles && roles.length ? (
+        ) : null}
+        {audienceLabel || (roles && roles.length) ? (
           <div className="text-muted-foreground">
-            {roles.slice(0, 2).join(", ")}
+            {[audienceLabel, roles?.slice(0, 3).join(", ")].filter(Boolean).join(" • ")}
           </div>
         ) : null}
       </div>

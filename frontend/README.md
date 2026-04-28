@@ -2,7 +2,8 @@
 
 Internal web console for the CalPolySOC private cloud. Built with **Next.js 16
 (App Router)**, **Tailwind CSS**, and **shadcn/ui** patterns. Talks to the
-internal `api.cloud.calpolysoc.org` endpoints (Floci + EC2 API wrapper).
+internal `api.cloud.calpolysoc.org` endpoints (Floci + EC2 API wrapper) and
+discovers launch templates from the Proxmox API.
 
 > No database is required. The console is stateless and proxies everything to
 > the internal cloud API, so Prisma is not used.
@@ -13,14 +14,15 @@ internal `api.cloud.calpolysoc.org` endpoints (Floci + EC2 API wrapper).
 Browser (on VPN)
   -> http://cloud.calpolysoc.org              (Nginx on aws VM)
      -> 127.0.0.1:3000                         (Next.js standalone server)
+  -> server components -> Proxmox API   (live template discovery)
         -> /api/ec2/*    -> http://api.cloud.calpolysoc.org/ec2/*    (EC2 API wrapper)
         -> /api/aws/s3   -> Floci S3
         -> /api/aws/ddb  -> Floci DynamoDB
         -> /api/aws/sqs  -> Floci SQS
 ```
 
-Server-only API routes mean credentials and the internal API hostname never
-leave the VPN-resident container.
+Server-only fetches mean the Proxmox token, Keycloak credentials, and internal
+API hostnames never leave the VPN-resident container.
 
 ## Local development
 
@@ -59,6 +61,31 @@ sudo nginx -t && sudo systemctl reload nginx
 
 DNS already points `cloud.calpolysoc.org -> 172.21.1.30`.
 
+### Live Proxmox catalog
+
+The console now discovers its image catalog directly from the Proxmox API at
+request time instead of reading a runtime JSON file.
+
+That live catalog drives:
+
+- Supported instance sizes
+- Image/template mappings
+- Current node, storage, bridge, and region profile
+- Default instance type shown in the launch form
+
+The console queries Proxmox for template VMs, filters them by name prefix
+(`tmpl-` by default), and maps known templates like Ubuntu 24.04,
+Ubuntu 22.04, Debian 12, Rocky Linux 9, and AlmaLinux 9 onto friendly image
+metadata. The `/settings` page is now a live discovery/status view and can
+still generate bootstrap commands for templates with a known cloud image URL.
+
+The launch form also sends the selected image id and Proxmox template metadata
+alongside `name`, `instance_type`, and `password`, so the EC2 wrapper can be
+upgraded to image-aware launches without another frontend change.
+
+Refresh the page and the console re-queries Proxmox; no image rebuild or JSON
+edit is required.
+
 ## Environment variables
 
 | Var | Default | Purpose |
@@ -74,6 +101,19 @@ DNS already points `cloud.calpolysoc.org -> 172.21.1.30`.
 | `AUTH_KEYCLOAK_ID` | `cloud-console` | Keycloak `client_id` |
 | `AUTH_KEYCLOAK_SECRET` | _required_ | Keycloak `client_secret` |
 | `AUTH_KEYCLOAK_ISSUER` | `https://auth.calpolysoc.org/realms/calpolysoc` | OIDC issuer |
+| `PROXMOX_HOST` | _required_ unless `PROXMOX_API_BASE_URL` is set | Proxmox API host |
+| `PROXMOX_PORT` | `8006` | Proxmox API port |
+| `PROXMOX_PROTOCOL` | `https` | Proxmox API scheme |
+| `PROXMOX_TOKEN_ID` | _required_ | Proxmox API token id |
+| `PROXMOX_TOKEN_SECRET` | _required_ | Proxmox API token secret |
+| `PROXMOX_NODE` | `kitasanblack` | launch/profile node label shown in the UI |
+| `PROXMOX_STORAGE` | `local-lvm` | storage target shown in launch/bootstrap views |
+| `PROXMOX_BRIDGE` | `vmbr0` | network bridge shown in launch/bootstrap views |
+| `PROXMOX_REGION` | falls back to `AWS_DEFAULT_REGION` | region label used by the console |
+| `PROXMOX_ALLOW_INSECURE_TLS` | `true` | allow self-signed internal Proxmox certs |
+| `PROXMOX_TEMPLATE_NAME_PREFIX` | `tmpl-` | only expose templates whose names start with this prefix |
+| `PROXMOX_API_BASE_URL` | unset | full override for the Proxmox API base URL |
+| `PROXMOX_DEFAULT_IMAGE_ID` | unset | preferred default image when multiple templates are present |
 
 ## Authentication
 
@@ -89,7 +129,7 @@ Browser
   -> session cookie set, access + refresh tokens stored in JWT
 ```
 
-Every page is gated by [middleware.ts](middleware.ts); unauthenticated
+Every page is gated by `proxy.ts`; unauthenticated
 requests are redirected to `/auth/signin`. Server-side proxy routes
 (`/api/ec2/*`, `/api/aws/*`) verify the session and forward the user's
 Keycloak access token as `Authorization: Bearer <token>` to the upstream
@@ -113,11 +153,22 @@ Copy the generated client secret into `AUTH_KEYCLOAK_SECRET`. Realm roles
 assigned to users land in `session.user.roles` and can be used for
 authorization checks in server components.
 
+The console now adapts its experience by role:
+
+- Default users get the **client workspace** with self-service navigation and workspace-scoped copy.
+- Any Keycloak role containing `staff` unlocks the **staff console**.
+- Any Keycloak role containing `admin` unlocks the **admin console**.
+
+The privileged console gates `/settings`, `/audit`, and the live EC2 catalog
+editor / template bootstrap tooling. The customer-facing shell remains focused
+on instances, storage, queues, and other day-to-day workload actions.
+
 ## Pages
 
 - `/` Dashboard — service health and resource counts
 - `/instances` EC2-style VM list with start / stop / terminate
 - `/instances/launch` Launch a new VM from the Proxmox cloud-init template
+- `/api/ec2/capabilities` Authenticated live view of the active Proxmox-backed EC2 catalog
 - `/s3` Bucket list (Floci S3)
 - `/dynamodb` Table list (Floci DynamoDB)
 - `/sqs` Queue list (Floci SQS)

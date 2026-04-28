@@ -39,6 +39,96 @@ type AppJWT = {
 };
 
 const issuer = process.env.AUTH_KEYCLOAK_ISSUER!;
+const keycloakClientId = process.env.AUTH_KEYCLOAK_ID!;
+
+type KeycloakClaims = {
+  sub?: string;
+  realm_access?: {
+    roles?: string[];
+  };
+  resource_access?: Record<string, { roles?: string[] }>;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function decodeJwtClaims(token: string | undefined): KeycloakClaims | null {
+  if (!token) return null;
+
+  const segments = token.split(".");
+  if (segments.length < 2) return null;
+
+  try {
+    const payload = segments[1]
+      .replace(/-/g, "+")
+      .replace(/_/g, "/")
+      .padEnd(Math.ceil(segments[1].length / 4) * 4, "=");
+    const decoded = Buffer.from(payload, "base64").toString("utf8");
+    const parsed = JSON.parse(decoded);
+    return isRecord(parsed) ? (parsed as KeycloakClaims) : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractStringArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+function extractRolesFromClaims(claims: KeycloakClaims | null | undefined) {
+  if (!claims) return [];
+
+  const realmRoles = extractStringArray(claims.realm_access?.roles);
+  const clientRoles = extractStringArray(
+    claims.resource_access?.[keycloakClientId]?.roles,
+  );
+
+  return Array.from(new Set([...realmRoles, ...clientRoles]));
+}
+
+function resolveRoles(input: {
+  profile?: unknown;
+  accessToken?: string;
+  idToken?: string;
+  fallback?: string[];
+}) {
+  const profileClaims = isRecord(input.profile)
+    ? (input.profile as KeycloakClaims)
+    : null;
+  const accessTokenClaims = decodeJwtClaims(input.accessToken);
+  const idTokenClaims = decodeJwtClaims(input.idToken);
+
+  return Array.from(
+    new Set([
+      ...extractRolesFromClaims(profileClaims),
+      ...extractRolesFromClaims(accessTokenClaims),
+      ...extractRolesFromClaims(idTokenClaims),
+      ...(input.fallback ?? []),
+    ]),
+  );
+}
+
+function resolveSubject(input: {
+  profile?: unknown;
+  accessToken?: string;
+  idToken?: string;
+  fallback?: string;
+}) {
+  const profileClaims = isRecord(input.profile)
+    ? (input.profile as KeycloakClaims)
+    : null;
+  const accessTokenClaims = decodeJwtClaims(input.accessToken);
+  const idTokenClaims = decodeJwtClaims(input.idToken);
+
+  return (
+    profileClaims?.sub ??
+    accessTokenClaims?.sub ??
+    idTokenClaims?.sub ??
+    input.fallback
+  );
+}
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
@@ -66,12 +156,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.expiresAt = account.expires_at
           ? account.expires_at * 1000
           : Date.now() + 60_000;
-        if (profile) {
-          token.sub = profile.sub ?? token.sub;
-          // Keycloak embeds realm roles under realm_access.roles
-          const realmAccess = (profile as any).realm_access;
-          if (realmAccess?.roles) token.roles = realmAccess.roles;
-        }
+        token.sub = resolveSubject({
+          profile,
+          accessToken: account.access_token,
+          idToken: account.id_token,
+          fallback: token.sub,
+        });
+        token.roles = resolveRoles({
+          profile,
+          accessToken: account.access_token,
+          idToken: account.id_token,
+          fallback: token.roles,
+        });
         return token;
       }
 
@@ -102,6 +198,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           idToken: refreshed.id_token ?? token.idToken,
           refreshToken: refreshed.refresh_token ?? token.refreshToken,
           expiresAt: Date.now() + refreshed.expires_in * 1000,
+          sub: resolveSubject({
+            accessToken: refreshed.access_token,
+            idToken: refreshed.id_token ?? token.idToken,
+            fallback: token.sub,
+          }),
+          roles: resolveRoles({
+            accessToken: refreshed.access_token,
+            idToken: refreshed.id_token ?? token.idToken,
+            fallback: token.roles,
+          }),
           error: undefined,
         };
       } catch {

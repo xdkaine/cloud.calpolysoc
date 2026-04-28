@@ -12,6 +12,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ec2, type Instance } from "@/lib/api";
+import {
+  formatInstanceTypeSummary,
+  getInstanceTypeCatalog,
+  memoryMiBToBytes,
+} from "@/lib/ec2-catalog";
+import { getEc2Capabilities } from "@/lib/ec2-capabilities";
 import { InstanceActions } from "./_components/instance-actions";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +49,7 @@ function statusBadge(status: string) {
 }
 
 export default async function InstancesPage() {
+  const capabilities = await getEc2Capabilities();
   let instances: Instance[] = [];
   let error: string | null = null;
   try {
@@ -93,23 +100,41 @@ export default async function InstancesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {instances.map((i) => (
-                  <TableRow key={i.vmid}>
-                    <TableCell className="font-mono text-xs">{i.vmid}</TableCell>
-                    <TableCell className="font-medium">{i.name}</TableCell>
-                    <TableCell>{statusBadge(i.status)}</TableCell>
-                    <TableCell>{i.instance_type ?? "—"}</TableCell>
-                    <TableCell>{i.cpus ?? "—"}</TableCell>
-                    <TableCell>{formatMem(i.maxmem)}</TableCell>
-                    <TableCell>{formatUptime(i.uptime)}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {i.node ?? "—"}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <InstanceActions vmid={i.vmid} status={i.status} />
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {instances.map((i) => {
+                  const typeInfo = getInstanceTypeCatalog(
+                    capabilities.instanceCatalog,
+                    i.instance_type,
+                  );
+                  const cpuCount = i.cpus ?? typeInfo?.vcpus;
+                  const memory =
+                    i.maxmem ??
+                    (typeInfo ? memoryMiBToBytes(typeInfo.memoryMiB) : undefined);
+
+                  return (
+                    <TableRow key={i.vmid}>
+                      <TableCell className="font-mono text-xs">{i.vmid}</TableCell>
+                      <TableCell className="font-medium">{i.name}</TableCell>
+                      <TableCell>{statusBadge(i.status)}</TableCell>
+                      <TableCell>
+                        <div>{i.instance_type ?? "—"}</div>
+                        {typeInfo ? (
+                          <div className="text-xs text-muted-foreground">
+                            {formatInstanceTypeSummary(typeInfo)}
+                          </div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell>{cpuCount ?? "—"}</TableCell>
+                      <TableCell>{formatMem(memory)}</TableCell>
+                      <TableCell>{formatUptime(i.uptime)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {i.node ?? "—"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <InstanceActions vmid={i.vmid} status={i.status} />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

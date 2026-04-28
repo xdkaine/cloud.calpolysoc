@@ -654,31 +654,28 @@ Deny all other ingress
 
 ### 8. Better Images / AMIs
 
-Current image mapping:
+Default image registry for the console:
 
 ```text
 ami-ubuntu-2404 -> Proxmox template 9001
+ami-ubuntu-2204 -> Proxmox template 9002
+ami-debian-12   -> Proxmox template 9010
+ami-rocky-9     -> Proxmox template 9020
+ami-almalinux-9 -> Proxmox template 9030
 ```
 
-Add image registry:
-
-```text
-ami-ubuntu-2404
-ami-debian-12
-ami-rocky-9
-ami-windows-2022
-```
-
-Each image should track:
+Each image now carries enough metadata for the web console to generate
+Proxmox template bootstrap commands in `/settings`:
 
 ```text
 AMI ID
 Display name
+Download URL
 Proxmox template VMID
+Proxmox template name
 Default username
 Cloud-init support
 Minimum disk size
-Node/storage availability
 ```
 
 ---

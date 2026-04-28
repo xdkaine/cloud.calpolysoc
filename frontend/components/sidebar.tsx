@@ -1,5 +1,6 @@
 "use client";
 
+import type { ComponentType } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -16,13 +17,15 @@ import {
   Settings,
   Rocket,
 } from "lucide-react";
+import { getConsoleAccess, hasAudience, type ConsoleAudience } from "@/lib/console-access";
 import { cn } from "@/lib/utils";
 
 type Item = {
   label: string;
   href: string;
-  icon: React.ComponentType<{ className?: string }>;
+  icon: ComponentType<{ className?: string }>;
   group: string;
+  minAudience?: ConsoleAudience;
 };
 
 const items: Item[] = [
@@ -35,13 +38,17 @@ const items: Item[] = [
   { group: "Network", label: "VPCs", href: "/vpcs", icon: Network },
   { group: "Network", label: "Security Groups", href: "/security-groups", icon: Shield },
   { group: "IAM", label: "Access Keys", href: "/access-keys", icon: KeyRound },
-  { group: "IAM", label: "Audit Logs", href: "/audit", icon: ScrollText },
-  { group: "Admin", label: "Settings", href: "/settings", icon: Settings },
+  { group: "Operations", label: "Audit Logs", href: "/audit", icon: ScrollText, minAudience: "staff" },
+  { group: "Operations", label: "Settings", href: "/settings", icon: Settings, minAudience: "staff" },
 ];
 
-export function Sidebar() {
+export function Sidebar({ roles }: { roles?: string[] }) {
   const pathname = usePathname();
-  const groups = Array.from(new Set(items.map((i) => i.group)));
+  const access = getConsoleAccess(roles);
+  const visibleItems = items.filter((item) =>
+    hasAudience(access.audience, item.minAudience ?? "client"),
+  );
+  const groups = Array.from(new Set(visibleItems.map((i) => i.group)));
 
   return (
     <aside className="hidden md:flex w-64 flex-col border-r bg-card">
@@ -61,7 +68,7 @@ export function Sidebar() {
               {group}
             </div>
             <ul className="space-y-0.5 px-3">
-              {items
+              {visibleItems
                 .filter((i) => i.group === group)
                 .map((item) => {
                   const active =
@@ -91,6 +98,7 @@ export function Sidebar() {
         ))}
       </nav>
       <div className="border-t p-4 text-xs text-muted-foreground">
+        <div>mode: {access.label.toLowerCase()}</div>
         <div>region: us-east-1</div>
         <div>account: 000000000000</div>
       </div>

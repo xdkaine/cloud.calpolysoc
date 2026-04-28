@@ -26,6 +26,11 @@ export type LaunchInput = {
   name: string;
   instance_type: string;
   password: string;
+  image_id?: string;
+  template_name?: string;
+  template_vmid?: number;
+  username?: string;
+  minimum_disk_gib?: number;
 };
 
 export type Job = {
