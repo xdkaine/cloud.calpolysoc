@@ -44,11 +44,12 @@ def cleanup_candidates(versions):
 
 def require_private(package):
     metadata = api(path(package))
-    if metadata.get('visibility') != 'private':
-        raise RuntimeError(f'Refusing publication: {package} is not confirmed private')
+    expected = 'private' if api('/repos/' + REPOSITORY).get('private') else 'public'
+    if metadata.get('visibility') != expected:
+        raise RuntimeError(f'Refusing publication: {package} visibility does not match source repository')
     if metadata.get('repository', {}).get('full_name') != REPOSITORY:
         raise RuntimeError(f'Refusing publication: {package} is not linked to expected repository')
-    print(package + ': confirmed private and linked')
+    print(package + ': visibility matches source repository and linkage confirmed')
 
 
 def cleanup():
@@ -72,13 +73,12 @@ def cleanup():
         api(path(package) + f'/versions/{identifier}', 'DELETE')
         print(f'Deleted only approved incident version {package}/{identifier}')
     print(f'Cleanup completed for {len(plan)} approved tagged versions; other versions untouched')
+    print('This removes tagged index versions only. Untagged OCI child manifests may remain addressable by digest; complete retraction is NOT established.')
 
 
 def main():
     if os.environ.get('GITHUB_REPOSITORY') != REPOSITORY:
         raise RuntimeError('Unexpected repository')
-    if api('/repos/' + REPOSITORY).get('private') is not True:
-        raise RuntimeError('Expected private source repository')
     if sys.argv[1:] == ['cleanup']:
         cleanup()
     elif len(sys.argv) == 3 and sys.argv[1] == 'check':
