@@ -1,0 +1,21 @@
+name: Remove approved exposed Cloud image versions
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: cloud-package-privacy-repair
+  cancel-in-progress: false
+jobs:
+  remove-approved-versions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Delete only the explicitly approved exposed source revision
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 deploy/scripts/package_privacy.py cleanup
