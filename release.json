@@ -1,0 +1,12 @@
+{
+  "branch": "main",
+  "images": {
+    "console": "ghcr.io/xdkaine/cloud-console@sha256:4b3fc546300533119adcb98086c1ae62dcdc6abbc727db84a92f6f4a462c884f",
+    "ec2api": "ghcr.io/xdkaine/cloud-ec2api@sha256:4c25c994ae0b7214c9b80d0c932967fe5a1deda1bed0e0bce85e0559affde3f5"
+  },
+  "repository": "xdkaine/cloud.calpolysoc",
+  "runId": "34015881835",
+  "schema": 1,
+  "schemaHashes": {},
+  "source": "69e126979f1a4c6bfa5bb8b327559d8dd0fd0268"
+}
