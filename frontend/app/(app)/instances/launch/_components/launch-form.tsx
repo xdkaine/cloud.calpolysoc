@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
-import type { LaunchInput } from "@/lib/api";
+import type { KeyPair, LaunchInput } from "@/lib/api";
 import {
   type Ec2Capabilities,
   formatInstanceTypeLabel,
@@ -18,11 +18,18 @@ import {
 const selectClassName =
   "flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
 
-export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) {
+export function LaunchForm({
+  capabilities,
+  keyPairs,
+}: {
+  capabilities: Ec2Capabilities;
+  keyPairs: KeyPair[];
+}) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [instanceType, setInstanceType] = useState(capabilities.defaultInstanceType);
   const [imageId, setImageId] = useState(capabilities.serverProfile.imageId);
+  const [keyName, setKeyName] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -95,6 +102,7 @@ export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) 
         template_vmid: selectedImage.templateVmid,
         username: selectedImage.username,
         minimum_disk_gib: selectedImage.minimumDiskGiB,
+        key_name: keyName || undefined,
       };
       const res = await fetch("/api/ec2/instances", {
         method: "POST",
@@ -227,28 +235,50 @@ export function LaunchForm({ capabilities }: { capabilities: Ec2Capabilities }) 
         </div>
       </fieldset>
 
-      <div className="space-y-2">
-        <Label htmlFor="password">
-          Initial {selectedImage.username} password
-        </Label>
-        <Input
-          id="password"
-          type="password"
-          required
-          minLength={8}
-          placeholder="ChangeMe123!"
-          value={password}
-          autoComplete="new-password"
-          onChange={(e: ChangeEvent<HTMLInputElement>) =>
-            setPassword(e.target.value)
-          }
-          aria-describedby="password-help"
-        />
-        <p id="password-help" className="text-xs text-muted-foreground">
-          Store this password securely. It is only used to initialize the VM
-          cloud-init account.
-        </p>
-      </div>
+      <fieldset className="space-y-4 rounded-lg border border-border/80 bg-muted/25 p-4">
+        <legend className="px-1 text-sm font-semibold text-primary">
+          Login
+        </legend>
+        <div className="space-y-2">
+          <Label htmlFor="key-name">SSH key pair</Label>
+          <select
+            id="key-name"
+            value={keyName}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => setKeyName(e.target.value)}
+            className={selectClassName}
+          >
+            <option value="">Password only</option>
+            {keyPairs.map((keyPair) => (
+              <option key={keyPair.key_pair_id} value={keyPair.key_name}>
+                {keyPair.key_name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="password">
+            Initial {selectedImage.username} password
+          </Label>
+          <Input
+            id="password"
+            type="password"
+            required={!keyName}
+            minLength={8}
+            placeholder={keyName ? "Optional when an SSH key is selected" : "ChangeMe123!"}
+            value={password}
+            autoComplete="new-password"
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setPassword(e.target.value)
+            }
+            aria-describedby="password-help"
+          />
+          <p id="password-help" className="text-xs text-muted-foreground">
+            A selected SSH key is injected through cloud-init. Password login is
+            optional when a key pair is selected.
+          </p>
+        </div>
+      </fieldset>
 
       {error ? (
         <div role="alert" className="whitespace-pre-wrap rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">

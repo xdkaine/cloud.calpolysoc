@@ -23,8 +23,9 @@ export default function AccessDenied({
         <CardContent className="space-y-4 text-sm text-muted-foreground">
           <p>
             Your current workspace view is scoped for customer self-service.
-            If you should have staff access, assign a Keycloak realm role that
-            includes <strong>staff</strong> or <strong>admin</strong>.
+            If you should have staff access, ask an administrator to add your
+            AD group to <strong>CLOUD_STAFF_GROUPS</strong> or{" "}
+            <strong>CLOUD_ADMIN_GROUPS</strong>.
           </p>
           <Button asChild>
             <Link href="/">Return to dashboard</Link>

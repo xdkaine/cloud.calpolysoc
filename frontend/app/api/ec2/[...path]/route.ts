@@ -27,9 +27,6 @@ async function forward(req: NextRequest, path: string[]) {
   const headers = filterHeaders(req.headers);
   applyConsoleIdentityHeaders(headers, session.user);
   headers.set("X-Console-Internal-Token", internalToken);
-  if (session.accessToken) {
-    headers.set("Authorization", `Bearer ${session.accessToken}`);
-  }
   const init: RequestInit = {
     method: req.method,
     headers,

@@ -1,24 +1,29 @@
+import { providerSessionActive } from "./lib/provider-session";
 import NextAuth, { type DefaultSession } from "next-auth";
-import Keycloak from "next-auth/providers/keycloak";
+import type { Provider } from "@auth/core/providers";
+import { getCloudApplicationAccess, cloudSessionClaims } from "./lib/application-access";
 
 /**
  * Auth.js v5 (NextAuth 5) configuration for CalPolySOC SSO.
  *
- * Talks to the internal Keycloak realm at:
- *   https://auth.calpolysoc.org/realms/calpolysoc
+ * Delegates authentication to the platform auth-service — a standalone
+ * OpenID Connect provider (authorization-code + PKCE, RS256 tokens):
+ *   https://auth-dev.calpolysoc.org/   (issuer)
  *
  * Required env vars (see .env.example):
- *   AUTH_SECRET                 - random string, used for JWT signing
- *   AUTH_KEYCLOAK_ID            - Keycloak client_id
- *   AUTH_KEYCLOAK_SECRET        - Keycloak client_secret
- *   AUTH_KEYCLOAK_ISSUER        - https://auth.calpolysoc.org/realms/calpolysoc
- *   AUTH_TRUST_HOST             - true (we run behind Nginx)
+ *   AUTH_SECRET            - random string, used for JWT session signing
+ *   AUTH_OIDC_ISSUER       - auth-service issuer URL
+ *   AUTH_OIDC_CLIENT_ID    - registered OIDC client id
+ *   AUTH_OIDC_CLIENT_SECRET- registered OIDC client secret
+ *   AUTH_TRUST_HOST        - true (we run behind Nginx)
+ *
+ * The auth-service does not issue refresh tokens (offline_access is not an
+ * allowed scope), so the Auth.js JWT session simply lives for
+ * `session.maxAge` and re-authenticates through the IdP when it expires.
  */
 
 declare module "next-auth" {
   interface Session {
-    accessToken?: string;
-    idToken?: string;
     error?: "RefreshAccessTokenError";
     user: {
       id?: string;
@@ -28,196 +33,95 @@ declare module "next-auth" {
 }
 
 type AppJWT = {
-  accessToken?: string;
-  idToken?: string;
-  refreshToken?: string;
-  expiresAt?: number;
   roles?: string[];
   sub?: string;
   error?: "RefreshAccessTokenError";
   [key: string]: unknown;
 };
 
-const issuer = process.env.AUTH_KEYCLOAK_ISSUER!;
-const keycloakClientId = process.env.AUTH_KEYCLOAK_ID!;
+const issuer = process.env.AUTH_OIDC_ISSUER!;
+const requireApplicationAccess = process.env.AUTH_REQUIRE_APPLICATION_ACCESS === "true";
 
-type KeycloakClaims = {
-  sub?: string;
-  realm_access?: {
-    roles?: string[];
-  };
-  resource_access?: Record<string, { roles?: string[] }>;
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function decodeJwtClaims(token: string | undefined): KeycloakClaims | null {
-  if (!token) return null;
-
-  const segments = token.split(".");
-  if (segments.length < 2) return null;
-
-  try {
-    const payload = segments[1]
-      .replace(/-/g, "+")
-      .replace(/_/g, "/")
-      .padEnd(Math.ceil(segments[1].length / 4) * 4, "=");
-    const decoded = Buffer.from(payload, "base64").toString("utf8");
-    const parsed = JSON.parse(decoded);
-    return isRecord(parsed) ? (parsed as KeycloakClaims) : null;
-  } catch {
-    return null;
-  }
-}
-
-function extractStringArray(value: unknown) {
+function extractStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === "string");
 }
 
-function extractRolesFromClaims(claims: KeycloakClaims | null | undefined) {
-  if (!claims) return [];
-
-  const realmRoles = extractStringArray(claims.realm_access?.roles);
-  const clientRoles = extractStringArray(
-    claims.resource_access?.[keycloakClientId]?.roles,
-  );
-
-  return Array.from(new Set([...realmRoles, ...clientRoles]));
-}
-
-function resolveRoles(input: {
-  profile?: unknown;
-  accessToken?: string;
-  idToken?: string;
-  fallback?: string[];
-}) {
-  const profileClaims = isRecord(input.profile)
-    ? (input.profile as KeycloakClaims)
-    : null;
-  const accessTokenClaims = decodeJwtClaims(input.accessToken);
-  const idTokenClaims = decodeJwtClaims(input.idToken);
-
-  return Array.from(
-    new Set([
-      ...extractRolesFromClaims(profileClaims),
-      ...extractRolesFromClaims(accessTokenClaims),
-      ...extractRolesFromClaims(idTokenClaims),
-      ...(input.fallback ?? []),
-    ]),
-  );
-}
-
-function resolveSubject(input: {
-  profile?: unknown;
-  accessToken?: string;
-  idToken?: string;
-  fallback?: string;
-}) {
-  const profileClaims = isRecord(input.profile)
-    ? (input.profile as KeycloakClaims)
-    : null;
-  const accessTokenClaims = decodeJwtClaims(input.accessToken);
-  const idTokenClaims = decodeJwtClaims(input.idToken);
-
-  return (
-    profileClaims?.sub ??
-    accessTokenClaims?.sub ??
-    idTokenClaims?.sub ??
-    input.fallback
-  );
-}
+/** Roles are AD group CNs supplied by the auth-service `groups` claim. */
+const authServiceProvider: Provider = {
+  id: "cloud-sso",
+  name: "CalPolySOC SSO",
+  type: "oidc",
+  issuer,
+  clientId: process.env.AUTH_OIDC_CLIENT_ID!,
+  clientSecret: process.env.AUTH_OIDC_CLIENT_SECRET!,
+  authorization: { params: { scope: "openid email profile amr groups" } },
+  // The auth-service mandates PKCE (S256) for every client.
+  checks: ["state", "pkce", "nonce"],
+  profile(profile: Record<string, unknown>) {
+    const preferredUsername =
+      typeof profile.preferred_username === "string" ? profile.preferred_username : undefined;
+    const name =
+      typeof profile.name === "string" && profile.name ? profile.name : preferredUsername;
+    return {
+      id: String(profile.sub ?? ""),
+      name: name || undefined,
+      email: typeof profile.email === "string" ? profile.email : undefined,
+      image: undefined,
+      preferredUsername,
+    };
+  },
+};
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
-  session: { strategy: "jwt" },
-  providers: [
-    Keycloak({
-      clientId: process.env.AUTH_KEYCLOAK_ID!,
-      clientSecret: process.env.AUTH_KEYCLOAK_SECRET!,
-      issuer,
-      authorization: { params: { scope: "openid profile email offline_access" } },
-    }),
-  ],
+  session: { strategy: "jwt", maxAge: requireApplicationAccess ? 600 : 8 * 60 * 60 },
+  providers: [authServiceProvider],
   pages: {
     signIn: "/auth/signin",
     error: "/auth/error",
   },
   callbacks: {
+    async signIn({ profile }) {
+      return !requireApplicationAccess || getCloudApplicationAccess(profile) !== null;
+    },
     async jwt({ token: rawToken, account, profile }) {
       const token = rawToken as AppJWT;
-      // Initial sign-in: stash tokens
+      // Initial sign-in: derive identity from verified claims.
+      // No refresh flow — the auth-service issues no refresh tokens.
       if (account) {
-        token.accessToken = account.access_token;
-        token.idToken = account.id_token;
-        token.refreshToken = account.refresh_token;
-        token.expiresAt = account.expires_at
-          ? account.expires_at * 1000
-          : Date.now() + 60_000;
-        token.sub = resolveSubject({
-          profile,
-          accessToken: account.access_token,
-          idToken: account.id_token,
-          fallback: token.sub,
-        });
-        token.roles = resolveRoles({
-          profile,
-          accessToken: account.access_token,
-          idToken: account.id_token,
-          fallback: token.roles,
-        });
+        const subject =
+          (typeof profile?.sub === "string" ? profile.sub : undefined) ??
+          (typeof account.sub === "string" ? account.sub : undefined);
+        if (subject) token.sub = subject;
+        if (requireApplicationAccess) {
+          const access = getCloudApplicationAccess(profile);
+          if (!access) return null;
+          if (typeof profile?.sid !== "string" || !profile.sid || !subject) return null;
+          token.providerSid = profile.sid;
+          if (!await providerSessionActive(token)) return null;
+          token.amr = profile?.amr;
+          token.applicationRoles = profile?.application_roles;
+          token.applicationAccessExpiresAt = access.expiresAt;
+          token.applicationAccessVersion = 1;
+          token.roles = access.roles;
+          return token;
+        }
+        token.roles = extractStringArray(
+          (profile as Record<string, unknown> | undefined)?.groups,
+        );
         return token;
       }
-
-      // Token still valid (60s skew)
-      if (token.expiresAt && Date.now() < token.expiresAt - 60_000) {
-        return token;
+      if (requireApplicationAccess) {
+        const access = cloudSessionClaims(token);
+        if (!access || !await providerSessionActive(token)) return null;
+        token.roles = access.roles;
       }
-
-      // Try refresh
-      if (!token.refreshToken) return token;
-      try {
-        const res = await fetch(`${issuer}/protocol/openid-connect/token`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            grant_type: "refresh_token",
-            client_id: process.env.AUTH_KEYCLOAK_ID!,
-            client_secret: process.env.AUTH_KEYCLOAK_SECRET!,
-            refresh_token: token.refreshToken,
-          }),
-          cache: "no-store",
-        });
-        const refreshed = await res.json();
-        if (!res.ok) throw refreshed;
-        return {
-          ...token,
-          accessToken: refreshed.access_token,
-          idToken: refreshed.id_token ?? token.idToken,
-          refreshToken: refreshed.refresh_token ?? token.refreshToken,
-          expiresAt: Date.now() + refreshed.expires_in * 1000,
-          sub: resolveSubject({
-            accessToken: refreshed.access_token,
-            idToken: refreshed.id_token ?? token.idToken,
-            fallback: token.sub,
-          }),
-          roles: resolveRoles({
-            accessToken: refreshed.access_token,
-            idToken: refreshed.id_token ?? token.idToken,
-            fallback: token.roles,
-          }),
-          error: undefined,
-        };
-      } catch {
-        return { ...token, error: "RefreshAccessTokenError" };
-      }
+      return token;
     },
     async session({ session, token: rawToken }) {
       const token = rawToken as AppJWT;
-      session.accessToken = token.accessToken;
-      session.idToken = token.idToken;
+      // OAuth credentials and provider session identifiers remain server-side.
       session.error = token.error;
       if (session.user) {
         session.user.id = token.sub ?? "";

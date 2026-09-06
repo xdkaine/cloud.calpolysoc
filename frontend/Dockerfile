@@ -28,6 +28,9 @@ RUN npm run build
 ############################
 FROM node:22-alpine AS runner
 WORKDIR /app
+ARG APP_REVISION=development
+ENV APP_REVISION=$APP_REVISION
+LABEL org.opencontainers.image.revision=$APP_REVISION
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000

@@ -1,0 +1,22 @@
+{
+  "repository": "xdkaine/cloud.calpolysoc",
+  "schemaInputs": {},
+  "images": [
+    {
+      "kind": "console",
+      "image": "ghcr.io/xdkaine/cloud-console",
+      "context": "frontend",
+      "dockerfile": "frontend/Dockerfile",
+      "target": "",
+      "buildArgs": ""
+    },
+    {
+      "kind": "ec2api",
+      "image": "ghcr.io/xdkaine/cloud-ec2api",
+      "context": "deploy/calpoly-cloud",
+      "dockerfile": "deploy/calpoly-cloud/Dockerfile",
+      "target": "",
+      "buildArgs": ""
+    }
+  ]
+}

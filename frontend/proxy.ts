@@ -9,7 +9,7 @@ export default auth((req) => {
     nextUrl.pathname.startsWith("/auth") ||
     nextUrl.pathname.startsWith("/api/auth");
 
-  const isPublicRoute = nextUrl.pathname === "/api/health";
+  const isPublicRoute = ["/api/health", "/api/version"].includes(nextUrl.pathname);
 
   if (isAuthRoute || isPublicRoute) return NextResponse.next();
 
@@ -31,5 +31,5 @@ export default auth((req) => {
 
 export const config = {
   // Run on every route except Next internals and static files.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  matcher: ["/((?!auth/logout(?:/|$)|api/auth/signout(?:/|$)|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
 };

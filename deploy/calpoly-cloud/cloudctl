@@ -3,7 +3,11 @@
 import argparse
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 from pathlib import Path
@@ -127,8 +131,20 @@ class Proxmox:
         self.check(response)
         return response.json()["data"]
 
-    def post(self, path, data=None):
+    def post(self, path, data=None, files=None, timeout=60):
         response = requests.post(
+            f"{self.base}{path}",
+            headers=self.headers,
+            data=data or {},
+            files=files,
+            verify=self.verify,
+            timeout=timeout,
+        )
+        self.check(response)
+        return response.json().get("data")
+
+    def put(self, path, data=None):
+        response = requests.put(
             f"{self.base}{path}",
             headers=self.headers,
             data=data or {},
@@ -189,7 +205,16 @@ class Proxmox:
         )
         self.wait_task(upid)
 
-    def configure_vm(self, vmid, name, instance_type, user, password):
+    def configure_vm(
+        self,
+        vmid,
+        name,
+        instance_type,
+        user,
+        password,
+        ssh_key=None,
+        extra_config=None,
+    ):
         spec = INSTANCE_TYPES[instance_type]
 
         data = {
@@ -204,6 +229,10 @@ class Proxmox:
 
         if password:
             data["cipassword"] = password
+        if ssh_key:
+            data["sshkeys"] = ssh_key
+        if extra_config:
+            data.update(extra_config)
 
         self.post(f"/nodes/{self.node}/qemu/{vmid}/config", data=data)
 
@@ -233,6 +262,174 @@ class Proxmox:
 
     def list_vms(self):
         return self.get(f"/nodes/{self.node}/qemu")
+
+    def resize_disk(self, vmid, disk, size_gib):
+        upid = self.put(
+            f"/nodes/{self.node}/qemu/{vmid}/resize",
+            data={"disk": disk, "size": f"{int(size_gib)}G"},
+        )
+        self.wait_task(upid)
+
+    def ensure_snippet_storage(self, storage):
+        config = self.get(f"/storage/{storage}")
+        content = str(config.get("content") or "")
+        values = [item.strip() for item in content.split(",") if item.strip()]
+        if "snippets" in values:
+            return
+        values.append("snippets")
+        self.put(f"/storage/{storage}", data={"content": ",".join(values)})
+
+    def upload_snippet(self, filename, content):
+        storage = os.environ.get("PROXMOX_SNIPPETS_STORAGE", "local")
+        self.ensure_snippet_storage(storage)
+        files = {
+            "filename": (
+                filename,
+                content.encode("utf-8"),
+                "text/cloud-config",
+            )
+        }
+        response = requests.post(
+            f"{self.base}/nodes/{self.node}/storage/{storage}/upload",
+            headers=self.headers,
+            data={"content": "snippets"},
+            files=files,
+            verify=self.verify,
+            timeout=120,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"snippet upload failed: HTTP {response.status_code} {response.text}"
+            )
+        result = response.json().get("data")
+        if isinstance(result, str) and result.startswith("UPID:"):
+            self.wait_task(result)
+        return f"{storage}:snippets/{filename}"
+
+    def upload_iso_file(self, filename, path):
+        storage = os.environ.get("PROXMOX_ISO_STORAGE", "local")
+        with open(path, "rb") as handle:
+            files = {"filename": (filename, handle, "application/octet-stream")}
+            response = requests.post(
+                f"{self.base}/nodes/{self.node}/storage/{storage}/upload",
+                headers=self.headers,
+                data={"content": "iso"},
+                files=files,
+                verify=self.verify,
+                timeout=300,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"ISO upload failed: HTTP {response.status_code} {response.text}"
+            )
+        result = response.json().get("data")
+        if isinstance(result, str) and result.startswith("UPID:"):
+            self.wait_task(result)
+        return f"{storage}:iso/{filename}"
+
+    def upload_seed_iso(self, vmid, service, user_data):
+        tool = shutil.which("genisoimage") or shutil.which("mkisofs")
+        if not tool:
+            raise RuntimeError("genisoimage or mkisofs is required for seed ISO fallback")
+
+        filename = f"calpolysoc-{service}-{vmid}-seed.iso"
+        with tempfile.TemporaryDirectory() as directory:
+            workdir = Path(directory)
+            (workdir / "user-data").write_text(user_data, encoding="utf-8")
+            (workdir / "meta-data").write_text(
+                f"instance-id: calpolysoc-{service}-{vmid}\n"
+                f"local-hostname: calpolysoc-{service}-{vmid}\n",
+                encoding="utf-8",
+            )
+            iso_path = workdir / filename
+            result = subprocess.run(
+                [
+                    tool,
+                    "-quiet",
+                    "-output",
+                    str(iso_path),
+                    "-volid",
+                    "cidata",
+                    "-joliet",
+                    "-rock",
+                    str(workdir / "user-data"),
+                    str(workdir / "meta-data"),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"seed ISO creation failed: {(result.stderr or result.stdout).strip()}"
+                )
+            return self.upload_iso_file(filename, iso_path)
+
+    def guest_network_interfaces(self, vmid):
+        try:
+            return self.get(f"/nodes/{self.node}/qemu/{vmid}/agent/network-get-interfaces")
+        except SystemExit:
+            raise
+
+    def guest_exec(self, vmid, script, timeout=900):
+        result = self.post(
+            f"/nodes/{self.node}/qemu/{vmid}/agent/exec",
+            data={
+                "command": "bash",
+                "input-data": script,
+                "capture-output": "1",
+            },
+            timeout=120,
+        )
+        pid = result.get("pid") if isinstance(result, dict) else result
+        if not pid:
+            print("Guest agent exec did not return a pid", file=sys.stderr)
+            sys.exit(1)
+
+        start = time.time()
+        while time.time() - start < timeout:
+            status = self.get(
+                f"/nodes/{self.node}/qemu/{vmid}/agent/exec-status?pid={pid}"
+            )
+            if status.get("exited"):
+                exitcode = status.get("exitcode", 0)
+                if exitcode == 0:
+                    return status
+                out = status.get("out-data") or ""
+                err = status.get("err-data") or ""
+                print(f"Guest bootstrap failed with exit code {exitcode}", file=sys.stderr)
+                if out:
+                    print(out, file=sys.stderr)
+                if err:
+                    print(err, file=sys.stderr)
+                sys.exit(1)
+            time.sleep(5)
+
+        print("Timed out waiting for guest bootstrap", file=sys.stderr)
+        sys.exit(1)
+
+    def wait_guest_ip(self, vmid, timeout=300):
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                interfaces = self.guest_network_interfaces(vmid)
+            except SystemExit:
+                interfaces = []
+            for interface in interfaces or []:
+                for address in interface.get("ip-addresses", []) or []:
+                    ip = address.get("ip-address")
+                    if address.get("ip-address-type") != "ipv4":
+                        continue
+                    if not ip or ip.startswith("127.") or ip.startswith("169.254."):
+                        continue
+                    return ip
+            time.sleep(5)
+        return None
+
+    def node_status(self):
+        return self.get(f"/nodes/{self.node}/status")
+
+    def storage_status(self):
+        return self.get(f"/nodes/{self.node}/storage")
 
 
 def format_instance(pve, vm):
@@ -267,6 +464,176 @@ def format_instance(pve, vm):
     return instance
 
 
+def disk_sort_key(name):
+    match = re.match(r"([a-z]+)(\d+)$", str(name))
+    if not match:
+        return (str(name), 0)
+    return (match.group(1), int(match.group(2)))
+
+
+def find_free_disk_key(config, preferred=None):
+    if preferred and preferred not in config:
+        return preferred
+    for index in range(1, 31):
+        key = f"scsi{index}"
+        if key not in config:
+            return key
+    print("No free SCSI disk slots are available", file=sys.stderr)
+    sys.exit(1)
+
+
+def root_disk_key(config):
+    for prefix in ("scsi", "virtio", "sata", "ide"):
+        for index in range(0, 32):
+            key = f"{prefix}{index}"
+            if key in config:
+                return key
+    return None
+
+
+def normalize_disk_value(value):
+    return str(value or "").split(",", 1)[0]
+
+
+def find_disk_by_backing(config, backing):
+    if not backing:
+        return None
+    target = normalize_disk_value(backing)
+    for key, value in config.items():
+        if not re.match(r"^(scsi|virtio|sata|ide)\d+$", str(key)):
+            continue
+        if normalize_disk_value(value) == target or str(value) == str(backing):
+            return key
+    return None
+
+
+def find_unused_by_backing(config, backing):
+    if not backing:
+        return None
+    target = normalize_disk_value(backing)
+    for key, value in config.items():
+        if not str(key).startswith("unused"):
+            continue
+        if normalize_disk_value(value) == target or str(value) == str(backing):
+            return key
+    return None
+
+
+def sh_quote(value):
+    return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
+def postgres_cloud_init(username, password, port):
+    quoted_user = sh_quote(username)
+    quoted_password = sh_quote(password)
+    return f"""#cloud-config
+package_update: true
+packages:
+  - qemu-guest-agent
+  - postgresql
+runcmd:
+  - |
+    set -eu
+    systemctl enable --now qemu-guest-agent || true
+    PG_VERSION="$(ls /etc/postgresql | sort -V | tail -1)"
+    CONF="/etc/postgresql/${{PG_VERSION}}/main/postgresql.conf"
+    HBA="/etc/postgresql/${{PG_VERSION}}/main/pg_hba.conf"
+    sed -i "s/^#\\?listen_addresses.*/listen_addresses = '*'/" "$CONF"
+    sed -i "s/^#\\?port.*/port = {int(port)}/" "$CONF"
+    grep -q "calpolysoc cloud ipv4" "$HBA" || echo "host all all 0.0.0.0/0 scram-sha-256 # calpolysoc cloud ipv4" >> "$HBA"
+    sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = {quoted_user}) THEN
+        EXECUTE 'CREATE ROLE ' || quote_ident({quoted_user}) || ' LOGIN SUPERUSER PASSWORD ' || quote_literal({quoted_password});
+      ELSE
+        EXECUTE 'ALTER ROLE ' || quote_ident({quoted_user}) || ' WITH LOGIN SUPERUSER PASSWORD ' || quote_literal({quoted_password});
+      END IF;
+    END
+    $$;
+SQL
+    systemctl restart postgresql
+"""
+
+
+def redis_cloud_init(password, port):
+    quoted_password = sh_quote(password)
+    return f"""#cloud-config
+package_update: true
+packages:
+  - qemu-guest-agent
+  - redis-server
+runcmd:
+  - |
+    set -eu
+    systemctl enable --now qemu-guest-agent || true
+    CONF="/etc/redis/redis.conf"
+    sed -i "s/^bind .*/bind 0.0.0.0 ::/" "$CONF"
+    sed -i "s/^protected-mode .*/protected-mode yes/" "$CONF"
+    sed -i "s/^port .*/port {int(port)}/" "$CONF"
+    if grep -q '^# requirepass ' "$CONF"; then
+      sed -i "s/^# requirepass .*/requirepass {quoted_password}/" "$CONF"
+    elif grep -q '^requirepass ' "$CONF"; then
+      sed -i "s/^requirepass .*/requirepass {quoted_password}/" "$CONF"
+    else
+      echo "requirepass {quoted_password}" >> "$CONF"
+    fi
+    systemctl enable redis-server
+    systemctl restart redis-server
+"""
+
+
+def postgres_bootstrap_script(username, password, port):
+    quoted_user = sh_quote(username)
+    quoted_password = sh_quote(password)
+    return f"""set -eu
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y qemu-guest-agent postgresql
+systemctl enable --now qemu-guest-agent || true
+PG_VERSION="$(ls /etc/postgresql | sort -V | tail -1)"
+CONF="/etc/postgresql/${{PG_VERSION}}/main/postgresql.conf"
+HBA="/etc/postgresql/${{PG_VERSION}}/main/pg_hba.conf"
+sed -i "s/^#\\?listen_addresses.*/listen_addresses = '*'/" "$CONF"
+sed -i "s/^#\\?port.*/port = {int(port)}/" "$CONF"
+grep -q "calpolysoc cloud ipv4" "$HBA" || echo "host all all 0.0.0.0/0 scram-sha-256 # calpolysoc cloud ipv4" >> "$HBA"
+sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = {quoted_user}) THEN
+    EXECUTE 'CREATE ROLE ' || quote_ident({quoted_user}) || ' LOGIN SUPERUSER PASSWORD ' || quote_literal({quoted_password});
+  ELSE
+    EXECUTE 'ALTER ROLE ' || quote_ident({quoted_user}) || ' WITH LOGIN SUPERUSER PASSWORD ' || quote_literal({quoted_password});
+  END IF;
+END
+$$;
+SQL
+systemctl restart postgresql
+"""
+
+
+def redis_bootstrap_script(password, port):
+    return f"""set -eu
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y qemu-guest-agent redis-server
+systemctl enable --now qemu-guest-agent || true
+CONF="/etc/redis/redis.conf"
+sed -i "s/^bind .*/bind 0.0.0.0 ::/" "$CONF"
+sed -i "s/^protected-mode .*/protected-mode yes/" "$CONF"
+sed -i "s/^port .*/port {int(port)}/" "$CONF"
+if grep -q '^# requirepass ' "$CONF"; then
+  sed -i "s/^# requirepass .*/requirepass {password}/" "$CONF"
+elif grep -q '^requirepass ' "$CONF"; then
+  sed -i "s/^requirepass .*/requirepass {password}/" "$CONF"
+else
+  echo "requirepass {password}" >> "$CONF"
+fi
+systemctl enable redis-server
+systemctl restart redis-server
+"""
+
+
 def run_instance(args):
     template_id = args.template_vmid or args.template_id
     pve = Proxmox(template_id=template_id)
@@ -274,6 +641,19 @@ def run_instance(args):
     if args.instance_type not in INSTANCE_TYPES:
         print(f"Unsupported instance type: {args.instance_type}", file=sys.stderr)
         sys.exit(1)
+
+    password = args.password
+    if args.password_env:
+        password = os.environ.get(args.password_env)
+        if password is None:
+            print(
+                f"Password environment variable is not set: {args.password_env}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    if password is None:
+        password = "ChangeMe123!"
 
     vmid = pve.next_vmid()
     instance_id = f"i-{vmid:08d}"
@@ -287,7 +667,14 @@ def run_instance(args):
     print(f"Instance type: {args.instance_type}")
 
     pve.clone_template(vmid, name)
-    pve.configure_vm(vmid, name, args.instance_type, args.user, args.password)
+    pve.configure_vm(
+        vmid,
+        name,
+        args.instance_type,
+        args.user,
+        password,
+        ssh_key=args.ssh_key,
+    )
     pve.start_vm(vmid)
 
     status = pve.status_vm(vmid)
@@ -349,6 +736,220 @@ def terminate_instance(args):
     print(f"Terminated i-{int(args.vmid):08d}")
 
 
+def attach_volume(args):
+    pve = Proxmox()
+    vmid = int(args.vmid)
+    config = pve.config_vm(vmid)
+    device = find_free_disk_key(config, args.device)
+
+    backing = args.backing
+    data = {}
+    if args.unused_key:
+        if args.unused_key not in config:
+            print(f"Unused disk not found: {args.unused_key}", file=sys.stderr)
+            sys.exit(1)
+        backing = config[args.unused_key]
+        data["delete"] = args.unused_key
+
+    if backing:
+        data[device] = backing
+    else:
+        data[device] = f"{pve.storage}:{int(args.size_gib)}"
+
+    pve.post(f"/nodes/{pve.node}/qemu/{vmid}/config", data=data)
+    updated = pve.config_vm(vmid)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "vmid": vmid,
+                "volume_id": args.volume_id,
+                "device": device,
+                "backing": updated.get(device),
+            },
+            sort_keys=True,
+        )
+    )
+
+
+def detach_volume(args):
+    pve = Proxmox()
+    vmid = int(args.vmid)
+    config = pve.config_vm(vmid)
+    device = args.device or find_disk_by_backing(config, args.backing)
+    if not device or device not in config:
+        print("Attached disk not found", file=sys.stderr)
+        sys.exit(1)
+
+    backing = config[device]
+    pve.post(
+        f"/nodes/{pve.node}/qemu/{vmid}/config",
+        data={"delete": device},
+    )
+    updated = pve.config_vm(vmid)
+    unused_key = find_unused_by_backing(updated, backing)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "vmid": vmid,
+                "device": device,
+                "backing": backing,
+                "unused_key": unused_key,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+def delete_volume_backing(args):
+    pve = Proxmox()
+    vmid = int(args.vmid)
+    config = pve.config_vm(vmid)
+    unused_key = args.unused_key or find_unused_by_backing(config, args.backing)
+    if not unused_key or unused_key not in config:
+        print("Unused disk not found", file=sys.stderr)
+        sys.exit(1)
+    backing = config[unused_key]
+    pve.post(
+        f"/nodes/{pve.node}/qemu/{vmid}/config",
+        data={"delete": unused_key},
+    )
+    print(
+        json.dumps(
+            {"ok": True, "vmid": vmid, "unused_key": unused_key, "backing": backing},
+            sort_keys=True,
+        )
+    )
+
+
+def create_volume_snapshot(args):
+    pve = Proxmox()
+    payload = {
+        "ok": True,
+        "provider": "metadata",
+        "snapshot_id": args.snapshot_id,
+        "volume_id": args.volume_id,
+        "vmid": args.vmid,
+        "device": args.device,
+        "backing": args.backing,
+    }
+    print(json.dumps(payload, sort_keys=True))
+
+
+def capacity_summary(args):
+    pve = Proxmox()
+    payload = {
+        "node": pve.node,
+        "status": pve.node_status(),
+        "storage": pve.storage_status(),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    print(f"Node: {pve.node}")
+    status = payload["status"]
+    print(f"CPU: {status.get('cpu')}")
+    print(f"Memory: {status.get('memory', {}).get('used')} / {status.get('memory', {}).get('total')}")
+    for storage in payload["storage"]:
+        print(
+            f"Storage {storage.get('storage')}: "
+            f"{storage.get('used')} / {storage.get('total')} "
+            f"({storage.get('content')})"
+        )
+
+
+def provision_service(args):
+    password = args.password
+    if args.password_env:
+        password = os.environ.get(args.password_env)
+    if not password:
+        print("Missing service password", file=sys.stderr)
+        sys.exit(1)
+
+    pve = Proxmox(template_id=args.template_vmid)
+    if args.instance_type not in INSTANCE_TYPES:
+        print(f"Unsupported instance type: {args.instance_type}", file=sys.stderr)
+        sys.exit(1)
+
+    vmid = pve.next_vmid()
+    service = args.service.lower()
+    if service == "postgres":
+        user_data = postgres_cloud_init(args.username, password, args.port)
+        bootstrap_script = postgres_bootstrap_script(args.username, password, args.port)
+    elif service == "redis":
+        user_data = redis_cloud_init(password, args.port)
+        bootstrap_script = redis_bootstrap_script(password, args.port)
+    else:
+        print(f"Unsupported managed service: {args.service}", file=sys.stderr)
+        sys.exit(1)
+
+    snippet_ref = None
+    seed_iso_ref = None
+    if not args.no_snippet:
+        filename = f"calpolysoc-{service}-{vmid}.yaml"
+        try:
+            snippet_ref = pve.upload_snippet(filename, user_data)
+        except RuntimeError as exc:
+            print(
+                f"Warning: cloud-init snippet upload failed, trying seed ISO fallback: {exc}",
+                file=sys.stderr,
+            )
+            try:
+                seed_iso_ref = pve.upload_seed_iso(vmid, service, user_data)
+            except RuntimeError as iso_exc:
+                print(
+                    f"Warning: seed ISO fallback failed, falling back to guest-agent bootstrap: {iso_exc}",
+                    file=sys.stderr,
+                )
+
+    pve.clone_template(vmid, args.name)
+    extra_config = {}
+    if snippet_ref:
+        extra_config["cicustom"] = f"user={snippet_ref}"
+    elif seed_iso_ref:
+        extra_config["ide2"] = f"{seed_iso_ref},media=cdrom"
+    pve.configure_vm(
+        vmid,
+        args.name,
+        args.instance_type,
+        args.cloud_user,
+        args.cloud_password,
+        extra_config=extra_config,
+    )
+
+    if args.storage_gib:
+        config = pve.config_vm(vmid)
+        disk = root_disk_key(config)
+        if disk:
+            pve.resize_disk(vmid, disk, args.storage_gib)
+
+    pve.start_vm(vmid)
+    ip = pve.wait_guest_ip(vmid, timeout=args.ip_timeout)
+    bootstrap = None
+    if not snippet_ref and not seed_iso_ref:
+        bootstrap = pve.guest_exec(vmid, bootstrap_script, timeout=args.bootstrap_timeout)
+        ip = ip or pve.wait_guest_ip(vmid, timeout=120)
+    payload = {
+        "ok": True,
+        "service": service,
+        "vmid": vmid,
+        "instance_id": f"i-{vmid:08d}",
+        "name": args.name,
+        "ip": ip,
+        "endpoint_address": ip,
+        "endpoint_port": int(args.port),
+        "snippet": snippet_ref,
+        "seed_iso": seed_iso_ref,
+        "bootstrap": bootstrap,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    for key, value in payload.items():
+        print(f"{key}: {value}")
+
+
 def main():
     load_env()
 
@@ -363,7 +964,9 @@ def main():
     run.add_argument("--template-name")
     run.add_argument("--instance-type", default="t3.small")
     run.add_argument("--user", default="ubuntu")
-    run.add_argument("--password", default="ChangeMe123!")
+    run.add_argument("--password")
+    run.add_argument("--password-env")
+    run.add_argument("--ssh-key")
     run.set_defaults(func=run_instance)
 
     desc = sub.add_parser("describe-instances")
@@ -382,6 +985,57 @@ def main():
     term = sub.add_parser("terminate-instance")
     term.add_argument("--vmid", required=True)
     term.set_defaults(func=terminate_instance)
+
+    attach = sub.add_parser("attach-volume")
+    attach.add_argument("--vmid", required=True)
+    attach.add_argument("--volume-id", required=True)
+    attach.add_argument("--size-gib", required=True)
+    attach.add_argument("--device")
+    attach.add_argument("--backing")
+    attach.add_argument("--unused-key")
+    attach.set_defaults(func=attach_volume)
+
+    detach = sub.add_parser("detach-volume")
+    detach.add_argument("--vmid", required=True)
+    detach.add_argument("--device")
+    detach.add_argument("--backing")
+    detach.set_defaults(func=detach_volume)
+
+    delete_disk = sub.add_parser("delete-volume-backing")
+    delete_disk.add_argument("--vmid", required=True)
+    delete_disk.add_argument("--unused-key")
+    delete_disk.add_argument("--backing")
+    delete_disk.set_defaults(func=delete_volume_backing)
+
+    snapshot = sub.add_parser("create-volume-snapshot")
+    snapshot.add_argument("--snapshot-id", required=True)
+    snapshot.add_argument("--volume-id", required=True)
+    snapshot.add_argument("--vmid")
+    snapshot.add_argument("--device")
+    snapshot.add_argument("--backing")
+    snapshot.set_defaults(func=create_volume_snapshot)
+
+    capacity = sub.add_parser("capacity-summary")
+    capacity.add_argument("--json", action="store_true")
+    capacity.set_defaults(func=capacity_summary)
+
+    service = sub.add_parser("provision-service")
+    service.add_argument("--service", required=True, choices=["postgres", "redis"])
+    service.add_argument("--name", required=True)
+    service.add_argument("--instance-type", required=True)
+    service.add_argument("--storage-gib", type=int, required=True)
+    service.add_argument("--username", required=True)
+    service.add_argument("--password")
+    service.add_argument("--password-env")
+    service.add_argument("--port", type=int, required=True)
+    service.add_argument("--template-vmid")
+    service.add_argument("--cloud-user", default="ubuntu")
+    service.add_argument("--cloud-password")
+    service.add_argument("--ip-timeout", type=int, default=900)
+    service.add_argument("--bootstrap-timeout", type=int, default=900)
+    service.add_argument("--no-snippet", action="store_true")
+    service.add_argument("--json", action="store_true")
+    service.set_defaults(func=provision_service)
 
     args = parser.parse_args()
     args.func(args)

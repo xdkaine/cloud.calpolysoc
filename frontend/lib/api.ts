@@ -39,17 +39,20 @@ export type Instance = {
     ugid?: string;
     propagate?: number;
   }>;
+  attached_volumes?: Volume[];
+  security_group_ids?: string[];
 };
 
 export type LaunchInput = {
   name: string;
   instance_type: string;
-  password: string;
+  password?: string;
   image_id?: string;
   template_name?: string;
   template_vmid?: number;
   username?: string;
   minimum_disk_gib?: number;
+  key_name?: string;
 };
 
 export type Job = {
@@ -59,6 +62,142 @@ export type Job = {
   state: string;
   message?: string;
   warnings?: string[];
+};
+
+export type Vpc = {
+  vpc_id: string;
+  cidr_block: string;
+  state: string;
+  name?: string | null;
+  is_default?: boolean;
+  created_at?: string;
+  owner?: {
+    principal?: string | null;
+    email?: string | null;
+  };
+};
+
+export type Subnet = {
+  subnet_id: string;
+  vpc_id: string;
+  cidr_block: string;
+  availability_zone?: string;
+  state: string;
+  name?: string | null;
+  created_at?: string;
+};
+
+export type SecurityGroupRule = {
+  rule_id: string;
+  group_id: string;
+  direction: "ingress" | "egress";
+  ip_protocol: string;
+  from_port?: number | null;
+  to_port?: number | null;
+  cidr_ip?: string | null;
+  source_group_id?: string | null;
+  description?: string | null;
+};
+
+export type SecurityGroup = {
+  group_id: string;
+  vpc_id: string;
+  name: string;
+  description?: string | null;
+  created_at?: string;
+  ingress_rules?: SecurityGroupRule[];
+  egress_rules?: SecurityGroupRule[];
+};
+
+export type Volume = {
+  volume_id: string;
+  state: string;
+  size_gib: number;
+  availability_zone?: string | null;
+  attached_vmid?: number | null;
+  last_vmid?: number | null;
+  device_name?: string | null;
+  proxmox_volume?: string | null;
+  unused_key?: string | null;
+  source_snapshot_id?: string | null;
+  name?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type Snapshot = {
+  snapshot_id: string;
+  volume_id: string;
+  state: string;
+  progress?: string;
+  size_gib: number;
+  name?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type DbInstance = {
+  db_instance_id: string;
+  name: string;
+  engine: string;
+  engine_version?: string;
+  state: string;
+  instance_class: string;
+  allocated_storage_gib: number;
+  vmid?: number | null;
+  endpoint_address?: string | null;
+  endpoint_port?: number | null;
+  endpoint?: { address?: string | null; port?: number | null };
+  security_group_ids?: string[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CacheInstance = {
+  cache_instance_id: string;
+  name: string;
+  engine: string;
+  engine_version?: string;
+  state: string;
+  instance_class: string;
+  allocated_storage_gib: number;
+  vmid?: number | null;
+  endpoint_address?: string | null;
+  endpoint_port?: number | null;
+  endpoint?: { address?: string | null; port?: number | null };
+  security_group_ids?: string[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type QuotaSummary = {
+  limits: Record<string, number | null>;
+  usage: Record<string, number | string | null>;
+  principal?: string;
+};
+
+export type CapacitySummary = {
+  node?: string;
+  status?: Record<string, any>;
+  storage?: Array<Record<string, any>>;
+};
+
+export type AccessKey = {
+  access_key_id: string;
+  secret_access_key?: string;
+  status: string;
+  name?: string | null;
+  created_at?: string;
+  last_used_at?: string | null;
+};
+
+export type KeyPair = {
+  key_pair_id: string;
+  key_name: string;
+  fingerprint: string;
+  public_key: string;
+  private_key?: string;
+  created_at?: string;
 };
 
 export type ConsoleIdentityUser = {
@@ -151,7 +290,7 @@ export function applyConsoleIdentityHeaders(
     headers.set("X-Console-User-Roles", user.roles.join(","));
   }
 
-  headers.set("X-Console-Auth-Source", "nextauth-keycloak");
+  headers.set("X-Console-Auth-Source", "nextauth-oidc");
 }
 
 export function consoleIdentityHeaders(user?: ConsoleIdentityUser | null) {
@@ -183,4 +322,45 @@ export const ec2 = {
     }),
   terminate: (vmid: number) =>
     request<{ ok: boolean }>(`/ec2/instances/${vmid}`, { method: "DELETE" }),
+  listVpcs: (user?: ConsoleIdentityUser | null) =>
+    request<{ vpcs: Vpc[] }>("/ec2/vpcs", {
+      headers: consoleIdentityHeaders(user),
+    }),
+  listSubnets: (user?: ConsoleIdentityUser | null) =>
+    request<{ subnets: Subnet[] }>("/ec2/subnets", {
+      headers: consoleIdentityHeaders(user),
+    }),
+  listSecurityGroups: (user?: ConsoleIdentityUser | null) =>
+    request<{ security_groups: SecurityGroup[] }>("/ec2/security-groups", {
+      headers: consoleIdentityHeaders(user),
+    }),
+  listAccessKeys: (user?: ConsoleIdentityUser | null) =>
+    request<{ access_keys: AccessKey[] }>("/ec2/access-keys", {
+      headers: consoleIdentityHeaders(user),
+    }),
+  listKeyPairs: (user?: ConsoleIdentityUser | null) =>
+    request<{ key_pairs: KeyPair[] }>("/ec2/key-pairs", {
+      headers: consoleIdentityHeaders(user),
+    }),
+  listVolumes: (user?: ConsoleIdentityUser | null) =>
+    request<{ volumes: Volume[] }>("/ec2/volumes", {
+      headers: consoleIdentityHeaders(user),
+    }),
+  listSnapshots: (user?: ConsoleIdentityUser | null) =>
+    request<{ snapshots: Snapshot[] }>("/ec2/snapshots", {
+      headers: consoleIdentityHeaders(user),
+    }),
+  listDbInstances: (user?: ConsoleIdentityUser | null) =>
+    request<{ db_instances: DbInstance[] }>("/ec2/db-instances", {
+      headers: consoleIdentityHeaders(user),
+    }),
+  listCacheInstances: (user?: ConsoleIdentityUser | null) =>
+    request<{ cache_instances: CacheInstance[] }>("/ec2/cache-instances", {
+      headers: consoleIdentityHeaders(user),
+    }),
+  quotas: (user?: ConsoleIdentityUser | null) =>
+    request<QuotaSummary>("/ec2/quotas", {
+      headers: consoleIdentityHeaders(user),
+    }),
+  capacity: () => request<{ capacity: CapacitySummary }>("/ec2/capacity"),
 };

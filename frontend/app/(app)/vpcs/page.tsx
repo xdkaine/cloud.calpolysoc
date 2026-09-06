@@ -1,18 +1,27 @@
+import { auth } from "@/auth";
 import { PageHeader } from "@/components/page-header";
-import { Card, CardContent } from "@/components/ui/card";
+import { ec2 } from "@/lib/api";
+import { VpcWorkspace } from "./_components/vpc-workspace";
 
-export default function Page() {
+export const dynamic = "force-dynamic";
+
+export default async function VpcsPage() {
+  const session = await auth();
+  const [vpcsResult, subnetsResult] = await Promise.all([
+    ec2.listVpcs(session?.user),
+    ec2.listSubnets(session?.user),
+  ]);
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="VPCs"
-        description="Network segmentation is not enabled for this private cloud console yet."
+        description="Create private network records for Proxmox-backed workloads."
       />
-      <Card>
-        <CardContent className="p-8 text-sm text-muted-foreground">
-          VPC management is not enabled in this console.
-        </CardContent>
-      </Card>
+      <VpcWorkspace
+        initialVpcs={vpcsResult.vpcs ?? []}
+        initialSubnets={subnetsResult.subnets ?? []}
+      />
     </div>
   );
 }

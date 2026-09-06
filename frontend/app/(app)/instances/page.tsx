@@ -157,6 +157,8 @@ export default async function InstancesPage({
                   <TableHead>Name</TableHead>
                   <TableHead>Owner</TableHead>
                   <TableHead>State</TableHead>
+                  <TableHead>Storage</TableHead>
+                  <TableHead>Security</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>vCPU</TableHead>
                   <TableHead>Memory</TableHead>
@@ -184,6 +186,30 @@ export default async function InstancesPage({
                         {ownerLabel(i, session?.user, fleetScope)}
                       </TableCell>
                       <TableCell>{statusBadge(i.status)}</TableCell>
+                      <TableCell className="text-xs">
+                        {(i.attached_volumes ?? []).length ? (
+                          <div className="space-y-1">
+                            {(i.attached_volumes ?? []).map((volume) => (
+                              <div key={volume.volume_id} className="font-mono">
+                                {volume.volume_id} {volume.device_name ?? ""}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">none</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {(i.security_group_ids ?? []).length ? (
+                          <div className="space-y-1">
+                            {(i.security_group_ids ?? []).map((groupId) => (
+                              <div key={groupId} className="font-mono">{groupId}</div>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">none</span>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <div>{i.instance_type ?? "—"}</div>
                         {typeInfo ? (

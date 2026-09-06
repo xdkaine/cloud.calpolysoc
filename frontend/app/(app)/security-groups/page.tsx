@@ -1,18 +1,27 @@
+import { auth } from "@/auth";
 import { PageHeader } from "@/components/page-header";
-import { Card, CardContent } from "@/components/ui/card";
+import { ec2 } from "@/lib/api";
+import { SecurityGroupWorkspace } from "./_components/security-group-workspace";
 
-export default function Page() {
+export const dynamic = "force-dynamic";
+
+export default async function SecurityGroupsPage() {
+  const session = await auth();
+  const [vpcsResult, groupsResult] = await Promise.all([
+    ec2.listVpcs(session?.user),
+    ec2.listSecurityGroups(session?.user),
+  ]);
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Security Groups"
-        description="Firewall rule management is not enabled for this private cloud console yet."
+        description="Manage ingress rule metadata for private cloud workloads."
       />
-      <Card>
-        <CardContent className="p-8 text-sm text-muted-foreground">
-          Security group management is not enabled in this console.
-        </CardContent>
-      </Card>
+      <SecurityGroupWorkspace
+        initialVpcs={vpcsResult.vpcs ?? []}
+        initialGroups={groupsResult.security_groups ?? []}
+      />
     </div>
   );
 }

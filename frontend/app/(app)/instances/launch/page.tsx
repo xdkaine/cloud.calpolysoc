@@ -1,3 +1,4 @@
+import { auth } from "@/auth";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,6 +8,7 @@ import {
   getImageCatalog,
 } from "@/lib/ec2-catalog";
 import { getEc2Capabilities } from "@/lib/ec2-capabilities";
+import { ec2 } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +19,9 @@ function sourceBadgeLabel(source: "defaults" | "env" | "proxmox") {
 }
 
 export default async function LaunchPage() {
+  const session = await auth();
   const capabilities = await getEc2Capabilities();
+  const keyPairsResult = await ec2.listKeyPairs(session?.user);
   const selectedImage =
     getImageCatalog(capabilities.images, capabilities.serverProfile.imageId) ??
     capabilities.images[0];
@@ -34,7 +38,10 @@ export default async function LaunchPage() {
             <CardTitle className="text-primary">Configure instance</CardTitle>
           </CardHeader>
           <CardContent className="pt-6">
-            <LaunchForm capabilities={capabilities} />
+            <LaunchForm
+              capabilities={capabilities}
+              keyPairs={keyPairsResult.key_pairs ?? []}
+            />
           </CardContent>
         </Card>
 

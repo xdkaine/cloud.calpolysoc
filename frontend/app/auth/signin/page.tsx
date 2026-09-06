@@ -70,7 +70,7 @@ export default async function SignInPage({
               <form
                 action={async () => {
                   "use server";
-                  await signIn("keycloak", { redirectTo: callbackUrl });
+                  await signIn("cloud-sso", { redirectTo: callbackUrl });
                 }}
               >
                 <Button type="submit" className="w-full">

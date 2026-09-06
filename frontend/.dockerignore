@@ -12,3 +12,7 @@ npm-debug.log*
 .vscode
 .idea
 coverage
+
+*.tsbuildinfo
+runtime
+.env*

@@ -19,10 +19,40 @@ const EXPLICIT_ROLE_AUDIENCE: Record<string, ConsoleAudience> = {
   staff: "staff",
 };
 
+/**
+ * Privileges are mapped from AD group CNs (the auth-service `groups` claim)
+ * via env config — mirroring the UAr portal's AUTH_ADMIN_GROUPS pattern:
+ *   CLOUD_ADMIN_GROUPS=Domain Admins,Cloud Admins
+ *   CLOUD_STAFF_GROUPS=IT Staff,Cloud Staff
+ * Unset lists mean no group grants that privilege.
+ */
+function parseGroupList(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .split(",")
+    .map((group) => group.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+const ADMIN_GROUPS = new Set(parseGroupList(process.env.CLOUD_ADMIN_GROUPS));
+const STAFF_GROUPS = new Set(parseGroupList(process.env.CLOUD_STAFF_GROUPS));
+
 export function getConsoleAudience(roles?: string[]): ConsoleAudience {
   const normalizedRoles = roles
     ?.map((role) => role.trim().toLowerCase())
     .filter(Boolean) ?? [];
+
+  // In restricted application mode only canonical roles derived from signed
+  // application_roles are accepted; legacy AD group environment maps are ignored.
+  if (process.env.AUTH_REQUIRE_APPLICATION_ACCESS === "true") {
+    return normalizedRoles.includes("cloud-admin") ? "admin" : "client";
+  }
+
+  if (normalizedRoles.some((role) => ADMIN_GROUPS.has(role))) {
+    return "admin";
+  }
+  if (normalizedRoles.some((role) => STAFF_GROUPS.has(role))) {
+    return "staff";
+  }
 
   const explicitAudience = normalizedRoles
     .map((role) => EXPLICIT_ROLE_AUDIENCE[role])

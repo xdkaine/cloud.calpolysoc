@@ -1,4 +1,3 @@
-import { signOut } from "@/auth";
 import { Button } from "@/components/ui/button";
 import { LogOut, User } from "lucide-react";
 
@@ -33,12 +32,7 @@ export function UserMenu({
       >
         {initials || <User className="h-4 w-4" />}
       </div>
-      <form
-        action={async () => {
-          "use server";
-          await signOut({ redirectTo: "/auth/signin" });
-        }}
-      >
+      <form method="post" action="/auth/logout">
         <Button type="submit" variant="ghost" size="icon" title="Sign out">
           <LogOut className="h-4 w-4" />
         </Button>
