@@ -1,8 +1,6 @@
 name: Cloud checks
 on:
   workflow_call:
-  pull_request:
-    branches: [main, dev]
 permissions:
   contents: read
 jobs:
@@ -21,7 +19,8 @@ jobs:
       - run: npm ci --legacy-peer-deps
       - run: npm run lint
       - run: npm test
-      - run: npm run build
+      - if: github.event_name == 'pull_request'
+        run: npm run build
   backend:
     runs-on: ubuntu-latest
     steps:
@@ -32,4 +31,5 @@ jobs:
       - name: Compile backend entry points without importing infrastructure clients
         run: python -m py_compile deploy/calpoly-cloud/ec2-api.py deploy/calpoly-cloud/ec2_wsgi.py deploy/calpoly-cloud/bootstrap-patch.py deploy/calpoly-cloud/cloudctl
       - name: Build deployable API image
+        if: github.event_name == 'pull_request'
         run: docker build -t cloud-ec2api:check deploy/calpoly-cloud
