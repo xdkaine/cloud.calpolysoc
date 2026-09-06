@@ -23,7 +23,7 @@ class PackagePrivacyTests(unittest.TestCase):
             require_private('cloud-console')
 
     def test_private_linked_package_allowed(self):
-        with patch('package_privacy.api', return_value={'visibility': 'private', 'repository': {'full_name': REPOSITORY}}):
+        with patch('package_privacy.api', side_effect=[{'visibility': 'private', 'repository': {'full_name': REPOSITORY}}, {'private': True}]):
             require_private('cloud-console')
 
     def test_cleanup_rechecks_and_never_deletes_untagged_versions(self):
@@ -45,3 +45,11 @@ class PackagePrivacyTests(unittest.TestCase):
             return [version(1, [EXPOSED_TAG])] if '/versions?' in path else version(1, ['other'])
         with patch('package_privacy.api', side_effect=api), self.assertRaises(RuntimeError):
             cleanup()
+
+    def test_public_linked_package_allowed(self):
+        with patch('package_privacy.api', side_effect=[{'visibility': 'public', 'repository': {'full_name': REPOSITORY}}, {'private': False}]):
+            require_private('cloud-console')
+
+    def test_private_source_public_package_denied(self):
+        with patch('package_privacy.api', side_effect=[{'visibility': 'public', 'repository': {'full_name': REPOSITORY}}, {'private': True}]), self.assertRaises(RuntimeError):
+            require_private('cloud-console')
