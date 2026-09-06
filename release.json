@@ -1,12 +1,12 @@
 {
   "branch": "dev",
   "images": {
-    "console": "ghcr.io/xdkaine/cloud-console@sha256:99d55205f6e2a36fecbd6020fa72238526c1fd47b301b16d19fd7ae67ce1354b",
-    "ec2api": "ghcr.io/xdkaine/cloud-ec2api@sha256:b66d98f8107e022ea92bd73df5717080a227aeab79fc76e2961e73eea663f66d"
+    "console": "ghcr.io/xdkaine/cloud-console@sha256:a5222e469926830e17e1b795ada3478d6871985db1acc56b43a9ff7865aad24c",
+    "ec2api": "ghcr.io/xdkaine/cloud-ec2api@sha256:21abc3740c040f36b9ad19b420d471d4ee6534ada355619ae45db4563a382dca"
   },
   "repository": "xdkaine/cloud.calpolysoc",
-  "runId": "34015881397",
+  "runId": "34016294282",
   "schema": 1,
   "schemaHashes": {},
-  "source": "69e126979f1a4c6bfa5bb8b327559d8dd0fd0268"
+  "source": "058c6c18727694b9862b7bdef51bc3bbe45ddce6"
 }
