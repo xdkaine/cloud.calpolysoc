@@ -7,6 +7,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const nextConfig = {
   output: "standalone",
   reactStrictMode: true,
+  // Keep first-party test fixtures in source/build stages only.
+  outputFileTracingExcludes: {
+    "/*": ["./tests/**/*", "./**/*.test.*", "./**/*.spec.*"],
+  },
   turbopack: {
     root: __dirname,
   },

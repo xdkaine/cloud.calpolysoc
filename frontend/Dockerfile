@@ -21,7 +21,8 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+RUN npm run build \
+ && node -e 'const fs=require("fs"); if(fs.existsSync(".next/standalone/tests")) throw new Error("First-party tests leaked into standalone runtime")'
 
 ############################
 # 3) runtime
